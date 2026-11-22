@@ -145,6 +145,10 @@ struct ThemePalette: Equatable {
             "knobBody": "#242F31", "knobGradient": "#242F31", "knobDial": "#FF9E3E", "button": "#293638",
             "led": "#FF9E3E", "radio": "#F23741", "displayText": "#FF9E3E", "displayTop": "#354548",
             "displayBottom": "#242F31"])),
+        ("Nova", ThemePalette(hexMap: [
+            "panel": "#2B2B2B", "header": "#1E1E1E", "headerText": "#FF6A2B", "label": "#E4E4E4",
+            "knobBody": "#1B1B1B", "knobGradient": "#C9C9CB", "knobDial": "#1B1B1B", "button": "#3A3A3C", "led": "#FF6A2B",
+            "radio": "#FF6A2B", "displayText": "#C9E64A", "displayTop": "#1D2418", "displayBottom": "#10140D"])),
         ("Nova Dark", ThemePalette(hexMap: [
             "panel": "#1A1D1F", "header": "#23282A", "headerText": "#FFA80E", "label": "#E6E8EA",
             "knobBody": "#151515", "knobGradient": "#4A4B4E", "knobDial": "#FFFFFF", "button": "#2A2B2D",

@@ -116,11 +116,33 @@ int main(int argc, char** argv) {
     pad();
     DesktopEditor ed(nullptr);
     ed.hooks_ = mock();
+    if (argc > 4) { // optional factory theme by name
+        for (const auto& t : themes::Factory()) if (t.name == argv[4]) ed.setTheme(t.palette, false);
+    }
     const int height = int(std::lround(width * DesktopEditor::kDesignHeight / DesktopEditor::kDesignWidth));
     ed.rect = Steinberg::ViewRect(0, 0, width, height);
     ed.knownRevision_ = 1;
     for (size_t i = 0; i < ed.knownValues_.size(); ++i) ed.knownValues_[i] = ed.value(int(i));
     ed.refreshBanks();
+    if (mode == "probe") { // clicks / drags every knob and fader, reports the ones that do not respond
+        for (int pass = 0; pass < 2; pass++) {
+            ed.setView(pass ? DesktopEditor::View::Play : DesktopEditor::View::Edit);
+            const auto controls = ed.controls_;
+            for (const auto& c : controls) {
+                if (c.id < 0 || (c.kind != DesktopEditor::Kind::Knob && c.kind != DesktopEditor::Kind::Fader)) continue;
+                const float x = c.x + c.w / 2;
+                const float y = c.kind == DesktopEditor::Kind::Knob ? c.y + c.a * .65f : c.y + c.h * .75f;
+                const int before = ed.value(c.id);
+                ed.mouseDown(x, y, false);
+                ed.mouseMove(x, y - 30);
+                ed.mouseUp();
+                if (ed.value(c.id) == before) for (auto it = controls.rbegin(); it != controls.rend(); ++it)
+                    if (it->id >= 0 && x >= it->x && x < it->x + it->w && y >= it->y && y < it->y + it->h) { std::printf("  hit goes to id %d kind %d rect %.1f,%.1f %.1fx%.1f\n", it->id, int(it->kind), it->x, it->y, it->w, it->h); break; }
+                if (ed.value(c.id) == before) std::printf("NO RESPONSE (%s): id %d %ls at %.1f,%.1f\n", pass ? "play" : "edit", c.id, c.label.c_str(), x, y);
+            }
+        }
+        return 0;
+    }
     ed.snapshotMode(mode);
     cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24, width, height);
     cairo_t* cr = cairo_create(surface);

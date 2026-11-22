@@ -17,6 +17,7 @@
 #include <cstring>
 
 #include <algorithm>
+#include <string>
 #include <numeric>
 #include <unordered_map>
 #include <cmath>
@@ -599,7 +600,7 @@ void DesktopEditor::constructLayout() {
     knob(23,L"sat",509,244,16,16);knob(22,L"trk",543,244,16,16);
     button(24,L"vel",Kind::Toggle,579,238,34,14);
     // ---- envelopes
-    plate(L"FILTER",682.5f,110,34,16);plate(L"AMPLIFIER",679.5f,193,43,19,true);
+    plate(L"FILTER",678.5f,109.5f,46,17);plate(L"AMP",678.5f,192.5f,46,17);
     static const wchar_t* const adsr[]={L"A",L"D",L"S",L"R"};
     for(int i=0;i<4;i++) {
         const float x=733.5f+26.f*float(i);
@@ -657,7 +658,7 @@ void DesktopEditor::constructPlayLayout() {
     label(24,214,L"FILTER TYPE",true);
     for(int i=0;i<5;i++) radio(14,i,types[i],33.f+84.f*float(i),240,42.f+84.f*float(i),36);
     // envelopes
-    plate(L"AMPLIFIER",470,84,70,16,true);plate(L"FILTER",655,84,70,16);
+    plate(L"AMP",470,84,70,16);plate(L"FILTER",655,84,70,16);
     static const wchar_t* const adsr[]={L"A",L"D",L"S",L"R"};
     for(int i=0;i<4;i++) {
         const float xa=478.f+40.f*float(i), xf=663.f+40.f*float(i);
@@ -973,7 +974,9 @@ void DesktopEditor::drawControlStatic(Graphics& g,const Control& c) {
         const bool hi=c.symbol==1;
         darkButton(g,hi ? blend(p[kButton],p[kHeaderText],.10f) : p[kButton],c.x,c.y,c.w,c.h);
         if(hi) roundedOutline(g,alpha(p[kHeaderText],230),c.x+.5f,c.y+.5f,c.w-1.f,c.h-1.f,3.f,1.1f);
-        text(g,c.label,c.x,c.y,c.w,c.h,7.8f,hi ? p[kHeaderText] : rgb(0xEDEDED),true,true);
+        float size=7.8f; // shrinks until the name fits the plate (Windows' font is wider)
+        while(size>5.6f && textCache_ && textCache_->get(c.label,textFontSize(size),c.w-4.f,false).cut) size-=.3f;
+        text(g,c.label,c.x,c.y,c.w,c.h,size,hi ? p[kHeaderText] : rgb(0xEDEDED),true,true);
         return;
     }
     case Kind::Fader:
@@ -1943,7 +1946,7 @@ void DesktopEditor::drawBrowser(Graphics& g) {
             text(g,id==19 ? L"cutoff" : L"resonance",cx-40,cy+22,80,13,9.0f,ink,false,true);
         }
         rule(g,p,px+8,288,px+pw-8,288);
-        plate(L"AMPLIFIER",px+14,323,62,19,true);
+        plate(L"AMP",px+14,323,48,18,false);
         static constexpr const wchar_t* adsr[]={L"A",L"D",L"S",L"R"};
         for(int i=0;i<4;i++) {
             const float cx=px+109.f+40.5f*float(i);
