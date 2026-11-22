@@ -201,7 +201,7 @@ void DesktopEditor::updateEditControl() {
     if(!editName_) {
         editName_=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",patchName().c_str(),
             WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL|WS_TABSTOP,
-            int(300*sx),int(38*sy),int(200*sx),int(19*sy),
+            int(300*sx),int(63*sy),int(200*sx),int(19*sy),
             window_,nullptr,win::ModuleInstance(),nullptr);
         if(editName_) {
             SendMessageW(editName_,WM_SETFONT,WPARAM(GetStockObject(DEFAULT_GUI_FONT)),TRUE);
@@ -210,7 +210,7 @@ void DesktopEditor::updateEditControl() {
             SetWindowLongPtrW(editName_,GWLP_USERDATA,GetWindowLongPtrW(editName_,GWLP_WNDPROC));
             SetWindowLongPtrW(editName_,GWLP_WNDPROC,LONG_PTR(&DesktopEditor::nameFieldProc));
         }
-    } else MoveWindow(editName_,int(300*sx),int(38*sy),int(200*sx),int(19*sy),TRUE);
+    } else MoveWindow(editName_,int(300*sx),int(63*sy),int(200*sx),int(19*sy),TRUE);
 }
 std::optional<std::wstring> DesktopEditor::nameFieldText() const {
     if(!editName_) return std::nullopt;
@@ -443,7 +443,10 @@ LRESULT DesktopEditor::windowMessage(UINT msg,WPARAM wp,LPARAM lp) {
     }
     // The characters of those keys: ours mean nothing, the forwarded ones
     // are translated again from the host's copy.
-    case WM_CHAR: case WM_DEADCHAR: return 0;
+    case WM_CHAR:
+        if(browser_ && !writing_ && wp>=32 && wp!=127) searchKey(wchar_t(wp));
+        return 0;
+    case WM_DEADCHAR: return 0;
     case kFieldKeyMessage:keyDown(UINT(wp));return 0;
     case WM_CONTEXTMENU: {
         if(typeMenu_>=0) {closeTypeMenu();return 0;} // like a click outside it

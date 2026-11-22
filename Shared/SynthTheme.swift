@@ -145,6 +145,11 @@ struct ThemePalette: Equatable {
             "knobBody": "#242F31", "knobGradient": "#242F31", "knobDial": "#FF9E3E", "button": "#293638",
             "led": "#FF9E3E", "radio": "#F23741", "displayText": "#FF9E3E", "displayTop": "#354548",
             "displayBottom": "#242F31"])),
+        ("Nova Dark", ThemePalette(hexMap: [
+            "panel": "#1A1D1F", "header": "#23282A", "headerText": "#FFA80E", "label": "#E6E8EA",
+            "knobBody": "#151515", "knobGradient": "#4A4B4E", "knobDial": "#FFFFFF", "button": "#2A2B2D",
+            "led": "#FFC21A", "radio": "#FFC21A", "displayText": "#58F0FF", "displayTop": "#102226",
+            "displayBottom": "#081012"])),
     ]
 
     subscript(_ c: ThemeColor) -> RGB { colors[c] ?? RGB(hex: c.defaultHex)! }

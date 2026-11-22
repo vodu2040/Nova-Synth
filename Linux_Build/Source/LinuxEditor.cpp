@@ -187,7 +187,7 @@ void DesktopEditor::invalidateDevice(int left,int top,int right,int bottom) cons
 // Windows: a native EDIT control at the same place. Here it is drawn in the
 // panel and typed into from X key events, or the host's onKeyDown. It opens
 // holding the patch name, all selected, so typing replaces it.
-static const RectF kNameField(300,38,200,19);
+static const RectF kNameField(300,63,200,19);
 void DesktopEditor::updateEditControl() {
     const bool open=browser_ && writing_;
     if(open && !nameFieldOpen_) {
@@ -584,6 +584,9 @@ void DesktopEditor::handleEvent(void* event,bool input) {
         case XK_Return: case XK_KP_Enter: vk=VK_RETURN;break;
         default: break;
         }
+        if(sym==XK_BackSpace && browser_ && !nameFieldOpen_ && keyDown(VK_BACK)) break;
+        if(browser_ && !nameFieldOpen_ && !(e.xkey.state&(ControlMask|Mod1Mask)) && !utf8.empty() &&
+           static_cast<unsigned char>(utf8[0])>=32 && utf8[0]!=127 && searchKey(wchar_t(static_cast<unsigned char>(utf8[0])))) break;
         if((vk && keyDown(vk)) || nameFieldOpen_) break; // the name field keeps the keyboard (Windows: its EDIT control)
         passKeyToHost(&e);
         break;

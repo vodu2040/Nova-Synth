@@ -134,7 +134,7 @@ OXO_TEST(ThemeStoreRoundTrip) {
     const fs::path dir = FreshDir("oxo_theme_store_roundtrip");
     themes::Store a(dir / "sub" / "themes.json");
     OXO_EXPECT(!a.Load()); // no file yet: keeps the defaults
-    OXO_EXPECT(a.Current() == themes::Synth2());
+    OXO_EXPECT(a.Current() == themes::NovaDark());
     themes::Palette p = themes::Synth2();
     p[themes::kPanel] = 0x102030;
     OXO_EXPECT(a.Remember(p));

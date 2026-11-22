@@ -530,7 +530,7 @@ struct POINT {
 };
 enum HCURSOR { IDC_ARROW, IDC_HAND, IDC_NO, IDC_SIZENWSE, IDC_COPY };
 // Plain integers, as Win32's macros (cond ? MF_CHECKED : 0 mixes no enum).
-inline constexpr UINT VK_RETURN = 0x0D, VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_ESCAPE = 0x1B,
+inline constexpr UINT VK_RETURN = 0x0D, VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_ESCAPE = 0x1B, VK_BACK = 0x08,
                       VK_LEFT = 0x25, VK_UP = 0x26, VK_RIGHT = 0x27, VK_DOWN = 0x28, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
 inline constexpr UINT MB_OK = 0, MB_YESNO = 4, MB_ICONWARNING = 0x30, MB_ICONINFORMATION = 0x40, MB_DEFBUTTON2 = 0x100;
 inline constexpr int IDOK = 1, IDYES = 6, IDNO = 7;

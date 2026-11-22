@@ -33,7 +33,7 @@ namespace lx { class MenuTracker; } // LinuxX11.hpp
 #endif
 
 // The VST3 editor of the Windows and Linux builds (the mac's is SwiftUI):
-// the original 770x560 SwiftUI design canvas redrawn with GDI+ (on Linux,
+// the 877x449 design canvas (the dark Synth2 layout) drawn with GDI+ (on Linux,
 // GDI+ on cairo: Linux_Build/Source/LinuxGdiplus.hpp). It uses the existing
 // SynthEditorCore bridge; the DSP and parameter layout belong exclusively
 // to the original Synth2 project.
@@ -61,14 +61,21 @@ public:
 #endif
 
 private:
-    enum class Kind { Knob, Toggle, Cycle, Display, Wave, Radio, Badge, Label };
+    // Check = an LED + label that toggles (no button face); Fader = a vertical
+    // slider; Plate = a static caption plate (symbol 1 = highlighted).
+    enum class Kind { Knob, Toggle, Cycle, Display, Wave, Radio, Badge, Label, Check, Fader, Plate };
     struct Control {
         Kind kind;
         int id, value;
         float x, y, w, h;
         std::wstring label;
         int symbol = 0;
+        // Knob: a = body diameter, b = label centre below the knob centre.
+        // Radio: a = label's left edge from x. Label: a = 1 left aligned.
+        float a = 0, b = 0;
     };
+    // The panel's views: the tab row's EDIT / PLAY (the browser is drawn over either).
+    enum class View { Edit, Play };
     struct Bank {
         std::string name;
         std::string source;
@@ -77,15 +84,19 @@ private:
         std::wstring wideName; // for the natural sort
         std::wstring leaf;     // its own folder's name, listed (s2::BankLeafName)
     };
-    void constructLayout();
-    void knob(int id, const wchar_t* label, float sx, float sy, float x, float y, float size = 24);
-    void button(int id, const wchar_t* label, Kind kind, float sx, float sy, float x, float y, float width = 40);
-    void display(int id, float sx, float sy, float x, float y, float width = 30);
-    void radio(int id, float sx, float sy, float x, float y, std::vector<std::wstring> choices,
-               int first = 0, bool horizontal = false, bool trailing = false);
-    void waves(int id, float sx, float sy, float x, float y, const std::vector<int>& values,
-               const std::vector<int>& shapes);
-    void label(float x, float y, const wchar_t* text);
+    void constructLayout();     // the EDIT view's controls
+    void constructPlayLayout(); // the PLAY view's controls
+    void setView(View view);
+    // Layout helpers (design coordinates).
+    void knob(int id, const wchar_t* label, float cx, float cy, float diameter = 20, float labelBelow = 0);
+    void button(int id, const wchar_t* label, Kind kind, float x, float y, float w, float h);
+    void display(int id, float x, float y, float w, float h);
+    void radio(int id, int value, const wchar_t* label, float ledX, float cy, float labelX, float labelW = 56);
+    void waves(int id, float cx0, float cx1, float cy0, float cy1, float w, float h,
+               const std::vector<int>& values, const std::vector<int>& shapes);
+    void fader(int id, float cx, float top, float length);
+    void plate(const wchar_t* label, float x, float y, float w, float h, bool highlighted = false);
+    void label(float cx, float cy, const wchar_t* text, bool left = false);
     void badge(float x, float y, const wchar_t* text, int id = -1);
     void text(Gdiplus::Graphics& g, const std::wstring& s, float x, float y, float w, float h, float size,
               Gdiplus::Color c, bool bold = false, bool centred = false, bool mono = false);
@@ -118,6 +129,8 @@ private:
     void invalidateTypeMenu() const;
     void drawTypeMenu(Gdiplus::Graphics& g);
     void drawChrome(Gdiplus::Graphics& g, int id, bool hovered);
+    bool tabSelected(int id) const;
+    void drawFilterGraph(Gdiplus::Graphics& g, bool frameOnly); // frameOnly = the static grid and scales
     void drawBrowser(Gdiplus::Graphics& g);
     void showMainMenu(int x, int y);
     void showThemeMenu(int x, int y);
@@ -135,7 +148,6 @@ private:
     void showImportDialog(int screenX, int screenY);
     void refreshBanks();
     bool isVersionBox(float x, float y) const;
-    float versionLeft_ = 593.f; // the version box's left edge, sized to its text in drawStatic
     int displayBankNumber(int bank) const;
     int bankRowOf(int bank) const;       // its row in the bank list, -1 = not listed
     void scrollBankIntoView(int bank);
@@ -160,6 +172,15 @@ private:
     void slotClick(int index, bool doubleClick);
     void commitWrite();
     bool keyDown(UINT key); // true = handled
+public:
+    bool searchKey(wchar_t ch); // a typed character for the browser's search box (8 = backspace)
+private:
+    std::wstring searchText_;
+    static std::wstring categoryOf(const std::string& name);
+    std::vector<int> shownSlots() const; // the preset list's slots (search applied)
+    void stepBank(int direction);
+    int chromeAt(float x, float y) const;
+    void chromeClick(int id);
     void loadSlot(int bank, int slot);
     void dragMove(float x, float y);
     void dragEnd(bool drop); // false = cancelled
@@ -197,6 +218,9 @@ private:
     void drawLearn(Gdiplus::Graphics& g);
     void requestWidth(int width);
     void tick();
+#if defined(OXO_SNAPSHOT)
+    void snapshotMode(const std::string& mode); // tools/desktop_snapshot: opens a view without a window
+#endif
     int value(int id) const;
     std::wstring formatted(int id) const;
     std::wstring patchName() const;
@@ -208,9 +232,9 @@ private:
     static std::vector<themes::Named> themeFiles();       // the Themes folder's
 
     // Design canvas and UI sizes.
-    static constexpr float kDesignWidth = 770.f, kDesignHeight = 560.f;
-    static constexpr int kMinWidth = 578;  // 75% of the 770-pixel design width, rounded up
-    static constexpr int kMaxWidth = 2310; // 300% of the design width
+    static constexpr float kDesignWidth = 877.f, kDesignHeight = 449.f;
+    static constexpr int kMinWidth = 658;  // 75% of the 877-pixel design width, rounded up
+    static constexpr int kMaxWidth = 2631; // 300% of the design width
     static constexpr uint64_t kSizeSettleMs = 1000, kSizeSaveDelayMs = 400; // host resizes (sizeSettledAt_)
 
     // ---- platform (Windows_Build/Source/DesktopEditor.cpp, Linux_Build/Source/LinuxEditor.cpp) ----
@@ -261,13 +285,14 @@ private:
     HWND window_{}; // the editor's child window (Win32 / X11)
     HWND focusBefore_{}; // who had the keyboard before takeKeyFocus (none = unknown)
     std::vector<Control> controls_;
-    themes::Palette theme_ = themes::Synth2(); // this instance's palette (kept in the session)
+    themes::Palette theme_ = themes::NovaDark(); // this instance's palette (kept in the session)
     std::array<Gdiplus::Color, themes::kSlotCount> colors_; // theme_ as GDI+ colours
     std::unique_ptr<ThemeEditorWindow, ThemeEditorDeleter> themeEditor_;
     std::unique_ptr<TextCache> textCache_; // GDI+ objects: lives between startGraphics / endGraphics
     bool staticDirty_ = true;
-    Gdiplus::RectF paintClip_{0, 0, 770, 560}; // design-space area being painted
+    Gdiplus::RectF paintClip_{0, 0, 877, 449}; // design-space area being painted
     std::array<int, 100> knownValues_{};        // params 0..99 as last drawn (host automation polling)
+    View view_ = View::Edit;
     bool browser_ = false;
     bool writing_ = false;
     bool midiLearn_ = false;

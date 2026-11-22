@@ -38,6 +38,7 @@ constexpr int kPanel=themes::kPanel, kHeader=themes::kHeader, kHeaderText=themes
               kDial=themes::kKnobDial, kButton=themes::kButton, kLed=themes::kLed, kRadio=themes::kRadio,
               kDisplayText=themes::kDisplayText, kDisplayTop=themes::kDisplayTop,
               kDisplayBottom=themes::kDisplayBottom;
+constexpr int kKnobBody=themes::kKnobBody, kKnobGradient=themes::kKnobGradient, kKnobDial=themes::kKnobDial;
 constexpr int kThemeCommand=1000; // theme menu items: kThemeCommand + index into the picks
 constexpr const wchar_t* kProjectURL=L"https://github.com/chab/oxo_synth2"; // SynthPanelView.projectURL
 // What the desktop calls these.
@@ -50,8 +51,17 @@ constexpr const wchar_t* kTrash=L"Trash";
 #endif
 // Theme.lcdText (Shared/SynthControls.swift): fixed browser / LCD text.
 constexpr int kLcdText=0xE0FFFF;
+// The panel's own buttons (hoveredChrome_ / chromeRect): the tab row, the
+// header, the browser's bottom bar.
+enum Chrome {cNone=0,cTabEdit,cTabPlay,cTabBrowser,cPrev,cNext,cSearch,cWrite,cMenu,cLearnExit,
+             cBrWrite,cBrNewBank,cBrFolder,cBrRefresh,cBrBankPrev,cBrBankNext,cBrImport,cBrExport};
 // Regions redrawn on their own (design coordinates).
-const RectF kLcdRect(50,484,432,70), kGridRect(548,505,216,28), kBrowserRect(6,34,758,444);
+const RectF kLcdRect(214,4,302,21), kBankLineRect(214,30,332,21), kMeterRect(784,4,86,19),
+            kBrowserRect(0,53,877,396), kGraphRect(481,79,189,79),
+            kBankPanel(6,60,180,344), kPresetPanel(195,60,385,344), kPreviewPanel(588,60,283,344),
+            kBottomBar(6,411,865,32), kSearchBox(202,84,372,21);
+constexpr float kBankTop=92.f, kBankRowH=17.f, kPresetTop=128.f, kPresetRowH=15.5f;
+constexpr int kBankRows=18, kPresetRows=17;
 
 Color rgb(int rgbValue) { return Color(255, (rgbValue>>16)&255, (rgbValue>>8)&255, rgbValue&255); }
 Color muted(const Color& c, float factor) {
@@ -167,7 +177,7 @@ private:
 
 namespace {
 // Font size is chosen by the control, NEVER reduced to fit the string.
-float textFontSize(float size) { return size<13.f ? std::max(10.8f,size*1.08f) : size; }
+float textFontSize(float size) { return size; }
 // The browser's bank names (drawBrowser, the tooltip's cut test).
 constexpr float kBankNameW=116.f, kBankNameSize=10.5f;
 constexpr float kTipTextSize=10.f, kTipPad=6.f, kTipH=17.f, kTipMargin=4.f;
@@ -196,34 +206,136 @@ void roundedOutline(Graphics& g, const Color& color,float x,float y,float w,floa
     GraphicsPath path;roundedPath(path,x,y,w,h,radius);
     Pen pen(color,width);g.DrawPath(&pen,&path);
 }
-// Match the original SwiftUI LED shadow: bloom only when the LED is on.
-// This is a small, transparent radial halo, not an enlarged solid LED.
+Color alpha(const Color& c, int a) { return Color(BYTE(std::clamp(a,0,255)),c.GetR(),c.GetG(),c.GetB()); }
+// The selector / switch LED: a lit one glows, an unlit one is a dull bead.
 void led(Graphics& g, const Color& c, float x,float y,float radius=3, bool glowing=false) {
     if(glowing) {
-        // Two small translucent SolidBrush halos avoid the PathGradientBrush
-        // used in v10, which is suspected of hanging some VST3 host paints.
-        // SolidBrush/FillEllipse are also used by the working v9 editor.
-        const float outerRadius=radius+3.f;
-        const float innerRadius=radius+1.5f;
-        SolidBrush outer(Color(22,c.GetR(),c.GetG(),c.GetB()));
-        SolidBrush inner(Color(40,c.GetR(),c.GetG(),c.GetB()));
-        g.FillEllipse(&outer,x-outerRadius,y-outerRadius,2.f*outerRadius,2.f*outerRadius);
-        g.FillEllipse(&inner,x-innerRadius,y-innerRadius,2.f*innerRadius,2.f*innerRadius);
+        // Translucent SolidBrush halos (no PathGradientBrush: suspected of
+        // hanging some VST3 host paints).
+        for(int i=3;i>=1;--i) {
+            const float halo=radius+1.5f*float(i);
+            SolidBrush b(Color(BYTE(16+10*(4-i)),c.GetR(),c.GetG(),c.GetB()));
+            g.FillEllipse(&b,x-halo,y-halo,2.f*halo,2.f*halo);
+        }
     }
-    SolidBrush b(c);
-    g.FillEllipse(&b,x-radius,y-radius,2*radius,2*radius);
-    Pen edge(Color(130,0,0,0),.65f);
+    SolidBrush b(c); g.FillEllipse(&b,x-radius,y-radius,2*radius,2*radius);
+    const float spot=radius*.55f;
+    SolidBrush shine(Color(BYTE(glowing?150:55),255,255,255));
+    g.FillEllipse(&shine,x-radius*.55f,y-radius*.7f,spot,spot);
+    Pen edge(Color(150,0,0,0),.6f);
     g.DrawEllipse(&edge,x-radius,y-radius,2*radius,2*radius);
 }
 void darkButton(Graphics& g, Color face, float x,float y,float w,float h, bool hovered=false) {
     GraphicsPath path;roundedPath(path,x,y,w,h,3.f);
-    // Highlight the button face without changing its size or text layout.
-    // Hover is visual only; existing click/parameter behaviour is unchanged.
-    if (hovered) face=blend(face,rgb(0xFFFFFF),.07f);
-    LinearGradientBrush grad(PointF(x,y),PointF(x,y+h),blend(face,rgb(0xFFFFFF),.10f),face);
+    // Hover is visual only; the size and text layout never change.
+    if (hovered) face=blend(face,rgb(0xFFFFFF),.09f);
+    LinearGradientBrush grad(PointF(x,y),PointF(x,y+h),blend(face,rgb(0xFFFFFF),.13f),blend(face,rgb(0x000000),.18f));
     g.FillPath(&grad,&path);
-    Pen edge(Color(170,0,0,0),1.f); // Identical outline when hovered.
+    Pen edge(Color(220,3,4,5),1.f);
     g.DrawPath(&edge,&path);
+    Pen light(Color(38,255,255,255),.8f); // the top edge catches the light
+    g.DrawLine(&light,x+2.5f,y+1.f,x+w-2.5f,y+1.f);
+}
+using Palette13=std::array<Color,themes::kSlotCount>;
+void displayTile(Graphics& g,const Palette13& p,float x,float y,float w,float h,bool lit=false) {
+    GraphicsPath path;roundedPath(path,x,y,w,h,2.5f);
+    LinearGradientBrush face(PointF(x,y),PointF(x,y+h),p[kDisplayTop],p[kDisplayBottom]);
+    g.FillPath(&face,&path);
+    Pen outer(Color(235,4,6,7),1.2f);
+    g.DrawPath(&outer,&path);
+    GraphicsPath inner;roundedPath(inner,x+1.f,y+1.f,w-2.f,h-2.f,2.f);
+    Pen rim(alpha(p[kDisplayText],lit?150:46),.7f);
+    g.DrawPath(&rim,&inner);
+}
+// A section / panel plate: a dark card with a header band and an accent title.
+void sectionPlate(Graphics& g,const Palette13& p,float x,float y,float w,float h,float band=19.f) {
+    GraphicsPath path;roundedPath(path,x,y,w,h,3.5f);
+    LinearGradientBrush body(PointF(x,y),PointF(x,y+h),blend(p[kPanel],rgb(0xFFFFFF),.035f),blend(p[kPanel],rgb(0x000000),.10f));
+    g.FillPath(&body,&path);
+    const GraphicsState saved=g.Save();
+    g.SetClip(RectF(x,y,w,band),CombineModeReplace);
+    LinearGradientBrush head(PointF(x,y),PointF(x,y+band),blend(p[kPanel],rgb(0x000000),.18f),blend(p[kPanel],rgb(0x000000),.34f));
+    g.FillPath(&head,&path);
+    g.Restore(saved);
+    Pen line(Color(190,6,8,9),1.f);
+    g.DrawLine(&line,x+1.f,y+band,x+w-1.f,y+band);
+    Pen edge(blend(p[kPanel],p[kLabel],.17f),1.f);
+    g.DrawPath(&edge,&path);
+    Pen outer(Color(200,5,6,7),1.f);
+    GraphicsPath out;roundedPath(out,x-.6f,y-.6f,w+1.2f,h+1.2f,4.f);
+    g.DrawPath(&outer,&out);
+}
+void rule(Graphics& g,const Palette13& p,float x0,float y0,float x1,float y1) {
+    Pen dark(Color(200,4,5,6),1.f), light(alpha(p[kLabel],34),1.f);
+    g.DrawLine(&dark,x0,y0,x1,y1);
+    if(y0==y1) g.DrawLine(&light,x0,y0+1.f,x1,y1+1.f); else g.DrawLine(&light,x0+1.f,y0,x1+1.f,y1);
+}
+// The knob: scale ticks, a brushed metal body; the pointer is drawn apart
+// (it changes with the value, the body does not).
+void paintKnobBody(Graphics& g,const Palette13& p,float x,float y,float d) {
+    const float r=d*.5f;
+    Pen ticks(alpha(p[kLabel],170),std::max(.8f,d*.045f));
+    for(int i=0;i<11;i++) {
+        const float a=(-140+i*28-90)*kPi/180, c=std::cos(a), s=std::sin(a);
+        const float r0=r+d*.10f+.8f, r1=r0+std::max(2.2f,d*.17f)*(i%5==0 ? 1.15f : .85f);
+        g.DrawLine(&ticks,x+c*r0,y+s*r0,x+c*r1,y+s*r1);
+    }
+    GraphicsPath circle;
+    circle.AddEllipse(x-r,y-r,d,d);
+    PathGradientBrush body(&circle);
+    body.SetCenterPoint(PointF(x-r*.30f,y-r*.38f));
+    body.SetCenterColor(p[kKnobGradient]);
+    INT count=1;
+    Color surround[1]={p[kKnobBody]};
+    body.SetSurroundColors(surround,&count);
+    g.FillPath(&body,&circle);
+    // the cap: a lighter disc fading towards the lower edge
+    const float cr=r*.76f;
+    GraphicsPath cap;cap.AddEllipse(x-cr,y-cr,2*cr,2*cr);
+    LinearGradientBrush sheen(PointF(x,y-cr),PointF(x,y+cr),Color(120,255,255,255),Color(0,255,255,255));
+    g.FillPath(&sheen,&cap);
+    Pen rim(Color(235,3,3,4),std::max(1.f,d*.06f));
+    g.DrawEllipse(&rim,x-r,y-r,d,d);
+    Pen bevel(Color(60,255,255,255),.7f);
+    g.DrawEllipse(&bevel,x-r+1.1f,y-r+1.1f,d-2.2f,d-2.2f);
+}
+void paintKnobPointer(Graphics& g,const Palette13& p,float x,float y,float d,float frac) {
+    const float r=d*.5f;
+    const float angle=(-140+280*frac-90)*kPi/180;
+    const float dx=std::cos(angle), dy=std::sin(angle);
+    Pen hand(p[kKnobDial],std::max(1.5f,d*.085f));
+    hand.SetStartCap(LineCapRound);hand.SetEndCap(LineCapRound);
+    g.DrawLine(&hand,PointF(x+dx*r*.30f,y+dy*r*.30f),PointF(x+dx*r*.86f,y+dy*r*.86f));
+}
+// A vertical fader: the slot and its scale ticks (static)...
+void paintFaderTrack(Graphics& g,const Palette13& p,float cx,float top,float length) {
+    Pen ticks(alpha(p[kLabel],90),.8f);
+    for(int i=0;i<8;i++) {
+        const float y=top+length*float(i)/7.f;
+        g.DrawLine(&ticks,cx-8.f,y,cx+8.f,y);
+    }
+    roundedFill(g,rgb(0x040506),cx-1.8f,top-1.f,3.6f,length+2.f,1.8f);
+    roundedOutline(g,Color(110,255,255,255),cx-1.8f,top-1.f,3.6f,length+2.f,1.8f,.6f);
+}
+// ...and its cap (dynamic).
+void paintFaderCap(Graphics& g,float cx,float top,float length,float frac) {
+    const float cy=top+length*(1.f-std::clamp(frac,0.f,1.f));
+    const float w=14.f,h=7.f;
+    GraphicsPath cap;roundedPath(cap,cx-w/2,cy-h/2,w,h,1.8f);
+    LinearGradientBrush face(PointF(cx,cy-h/2),PointF(cx,cy+h/2),rgb(0xE3E4E6),rgb(0x6E6F72));
+    g.FillPath(&face,&cap);
+    Pen edge(Color(230,4,4,5),.9f);
+    g.DrawPath(&edge,&cap);
+    Pen groove(Color(120,20,20,22),.8f);
+    g.DrawLine(&groove,cx-w/2+1.f,cy,cx+w/2-1.f,cy);
+}
+// The magnifier of the search button.
+void magnifier(Graphics& g,const Color& c,float cx,float cy,float size) {
+    Pen pen(c,1.5f);
+    pen.SetStartCap(LineCapRound);pen.SetEndCap(LineCapRound);
+    const float r=size*.30f;
+    g.DrawEllipse(&pen,cx-size*.12f-r,cy-size*.12f-r,2*r,2*r);
+    g.DrawLine(&pen,cx+size*.10f,cy+size*.10f,cx+size*.34f,cy+size*.34f);
 }
 // ThemeStore.shared: one themes.json per process, shared by every editor.
 // remember() writes once the edit settles (the theme editor streams edits).
@@ -259,9 +371,9 @@ std::vector<themes::Named> DesktopEditor::themeFiles() { return sharedThemes().f
 DesktopEditor::DesktopEditor(OxoSynth2Controller* controller)
     : CPluginView(nullptr), controller_(controller) {
     // Prefer last accepted user zoom in the active standard/portable data folder.
-    // Keep the original 700px (~91%) first-run default for compatibility.
-    const int savedWidth=winzoom::LoadWidth(storage::Root(),700,kMinWidth,kMaxWidth);
-    rect=ViewRect(0,0,savedWidth,int(std::lround(savedWidth*560.0/770.0)));
+    // The first-run default is 1000 px wide (114%).
+    const int savedWidth=winzoom::LoadWidth(storage::Root(),1000,kMinWidth,kMaxWidth);
+    rect=ViewRect(0,0,savedWidth,int(std::lround(savedWidth*double(kDesignHeight)/double(kDesignWidth))));
     if(controller_) hooks_=controller_->MakeHooks();
     if(startGraphics()) textCache_=std::make_unique<TextCache>();
     constructLayout();
@@ -284,7 +396,7 @@ tresult PLUGIN_API DesktopEditor::checkSizeConstraint(ViewRect* r) {
     if(!r) return kInvalidArgument;
     int width=std::clamp(int(r->getWidth()),kMinWidth,kMaxWidth);
     r->right=r->left+width;
-    r->bottom=r->top+int(std::lround(width*560.0/770.0));
+    r->bottom=r->top+int(std::lround(width*double(kDesignHeight)/double(kDesignWidth)));
     return kResultTrue;
 }
 tresult PLUGIN_API DesktopEditor::onSize(ViewRect* r) {
@@ -389,173 +501,194 @@ void DesktopEditor::show(int id) {
     flash(toWide(hooks_.displayName ? hooks_.displayName(hooks_.ctx,id) : "")+L":  "+formatted(id));
 }
 
-void DesktopEditor::knob(int id,const wchar_t* name,float sx,float sy,float x,float y,float size) {
-    // KnobView's SwiftUI stack is centred at y+6.5, but its circular knob
-    // centre is y; the label sits underneath. Avoid an extra 6.5 px offset.
-    controls_.push_back({Kind::Knob,id,0,sx+x-size*.65f,sy+y-size*.65f,size*1.3f,size*1.65f,name});
+// ---- layout ---------------------------------------------------------------
+// The dark Synth2 layout on an 877x449 canvas. Every Synth1 parameter keeps
+// its original ID and is driven by OxoSynth2Hooks; coordinates are design
+// pixels (the reference mock-up at half size).
+void DesktopEditor::knob(int id,const wchar_t* name,float cx,float cy,float d,float below) {
+    if(d<=22.f) d*=.87f; // the mock-up's small knobs
+    if(below<=0.f) below=d*.5f+8.5f;
+    controls_.push_back({Kind::Knob,id,0,cx-d*.65f,cy-d*.65f,d*1.3f,d*.65f+below+6.f,name,0,d,below});
 }
-void DesktopEditor::button(int id,const wchar_t* name,Kind kind,float sx,float sy,float x,float y,float width) {
-    controls_.push_back({kind,id,0,sx+x-width/2,sy+y-8.5f,width,17,name});
+void DesktopEditor::button(int id,const wchar_t* name,Kind kind,float x,float y,float w,float h) {
+    controls_.push_back({kind,id,0,x,y,w,h,name});
 }
-void DesktopEditor::display(int id,float sx,float sy,float x,float y,float width) {
-    controls_.push_back({Kind::Display,id,0,sx+x-width/2,sy+y-8.5f,width,17,L""});
+void DesktopEditor::display(int id,float x,float y,float w,float h) {
+    controls_.push_back({Kind::Display,id,0,x,y,w,h,L""});
 }
-void DesktopEditor::radio(int id,float sx,float sy,float x,float y,std::vector<std::wstring> choices,
-                          int first,bool horizontal,bool trailing) {
-    const int n=int(choices.size());
-    const float step=horizontal ? (id==71 ? 44.f : 38.f) :
-        (id==14 || id==31 || id==32 || id==38 ? 14.f : 13.f);
-    for(int i=0;i<n;i++) {
-        const float px=sx+x+(horizontal ? (i-(n-1)/2.f)*step : 0.f);
-        const float py=sy+y+(horizontal ? 0.f : (i-(n-1)/2.f)*step);
-        const bool iconOnly=(id==41 || id==46);
-        // Original SwiftUI filter selector centre: x=196 in its section.
-        // LED and label remain inside the 218px panel, not over the button.
-        if(id==14) {
-            controls_.push_back({Kind::Radio,id,first+i,px-22.f,py-6.f,
-                                 44.f,12.f,choices[size_t(i)],0});
-        } else if(id==71) {
-            // Oscillator modulation destinations: retain full 'osc2' text
-            // without shrinking the font; spread the three choices evenly.
-            controls_.push_back({Kind::Radio,id,first+i,px-22.f,py-6.f,
-                                 44.f,12.f,choices[size_t(i)],0});
-        } else if(id==97) {
-            // Sub octave switches need a full-width label at the same font
-            // size; never shrink '-1oct' just because it is longer.
-            controls_.push_back({Kind::Radio,id,first+i,
-                                 sx+x-42.f+float(i)*54.f,sy+y-6.f,
-                                 50.f,12.f,choices[size_t(i)],0});
-        } else {
-            const float width=iconOnly ? 14.f : horizontal ? step : 65.f;
-            controls_.push_back({Kind::Radio,id,first+i,
-                                 iconOnly ? px-7.f : px-(horizontal?step/2.f:15.f),
-                                 py-6.f,width,12.f,choices[size_t(i)],trailing?1:0});
-        }
-    }
+// A selector LED at (ledX, cy) with its caption starting at labelX.
+void DesktopEditor::radio(int id,int value,const wchar_t* name,float ledX,float cy,float labelX,float labelW) {
+    const bool justLed=(id==41 || id==46); // the LFO destination matrix: names are separate labels
+    if(justLed) controls_.push_back({Kind::Radio,id,value,ledX-8.f,cy-8.f,16.f,16.f,L"",0,0,0});
+    else controls_.push_back({Kind::Radio,id,value,ledX-7.f,cy-7.f,labelX+labelW-ledX+7.f,14.f,name,0,labelX-(ledX-7.f),0});
 }
-void DesktopEditor::waves(int id,float sx,float sy,float x,float y,const std::vector<int>& values,
-                          const std::vector<int>& shapes) {
-    // Original WaveRadio is a two-by-two 22x14 grid with a 2px gap.
-    // Slightly larger cells and a 3px gap, still centred on the original x/y.
+void DesktopEditor::waves(int id,float cx0,float cx1,float cy0,float cy1,float w,float h,
+                          const std::vector<int>& values,const std::vector<int>& shapes) {
     for(size_t i=0;i<values.size();i++) {
-        const float cx=sx+x+(i%2==0?-13.5f:13.5f);
-        const float cy=sy+y+(i/2==0?-9.f:9.f);
-        controls_.push_back({Kind::Wave,id,values[i],cx-12.f,cy-7.5f,
-                             24.f,15.f,L"",shapes[i]});
+        const float cx=i%2==0 ? cx0 : cx1, cy=i/2==0 ? cy0 : cy1;
+        controls_.push_back({Kind::Wave,id,values[i],cx-w/2,cy-h/2,w,h,L"",shapes[i]});
     }
 }
-void DesktopEditor::label(float x,float y,const wchar_t* name) {
-    controls_.push_back({Kind::Label,-1,0,x-40,y-8,80,16,name});
+void DesktopEditor::fader(int id,float cx,float top,float length) {
+    controls_.push_back({Kind::Fader,id,0,cx-9.f,top-5.f,18.f,length+10.f,L""});
+}
+void DesktopEditor::plate(const wchar_t* name,float x,float y,float w,float h,bool highlighted) {
+    controls_.push_back({Kind::Plate,-1,0,x,y,w,h,name,highlighted?1:0});
+}
+void DesktopEditor::label(float cx,float cy,const wchar_t* name,bool left) {
+    if(left) controls_.push_back({Kind::Label,-1,0,cx,cy-8.f,90.f,16.f,name,0,1.f,0});
+    else controls_.push_back({Kind::Label,-1,0,cx-45.f,cy-8.f,90.f,16.f,name,0,0,0});
 }
 void DesktopEditor::badge(float x,float y,const wchar_t* name,int id) {
-    controls_.push_back({Kind::Badge,id,0,x-8,y-8,16,16,name});
+    controls_.push_back({Kind::Badge,id,0,x,y,14.f,14.f,name});
 }
 
 void DesktopEditor::constructLayout() {
-    // Layout transcribed from Shared/SynthPanelView.swift, using each section's
-    // original local coordinate system. Every visible Synth1 parameter keeps
-    // its original ID and is driven by OxoSynth2Hooks.
-    constexpr float ox=6,oy=34,lx=6,ly=278,mx=6,my=412,ax=324,ay=34,fx=324,fy=118,
-                    arx=324,ary=278,ex=548,ey=34,qx=548,qy=118,dx=548,dy=180,cx=548,cy=242,
-                    vx=548,vy=304;
-    badge(ox+14,oy+36,L"1"); // Leave the oscillator on/off button fixed.
-    // Move the OSC1 / Sub row down 4px to align the knobs with Amplifier.
-    waves(0,ox,oy,54,44,{0,1,2,3},{0,1,2,3});
-    knob(76,L"det",ox,oy,104,40);knob(45,L"FM",ox,oy,146,40);
-    label(ox+194,oy+24,L"sub");
-    waves(96,ox,oy,216,48,{0,1,2,3},{0,3,1,5});
-    knob(95,L"sub",ox,oy,282,40);
-    radio(97,ox,oy,242,74,{L"0oct",L"-1oct"},0,true);
-    // Leave the original section separators fixed; the Osc 2 controls sit
-    // a few pixels lower to give the upper separator breathing room.
-    badge(ox+14,oy+98,L"2");
-    waves(1,ox,oy,54,102,{1,2,3,4},{1,2,3,4});
-    button(7,L"ring",Kind::Toggle,ox,oy,108,98);
-    button(6,L"sync",Kind::Toggle,ox,oy,154,98);
-    display(9,ox,oy,260,94,32);
-    label(ox+260,oy+110,L"key shift");
-    button(4,L"track",Kind::Toggle,ox,oy,36,140,52);
-    knob(2,L"pitch",ox,oy,104,136);knob(3,L"fine",ox,oy,146,136);
-    knob(5,L"mix",ox,oy,238,136);knob(8,L"p/w",ox,oy,282,136);
-    button(10,L"m.env",Kind::Toggle,ox,oy,36,184,52);
-    knob(12,L"A",ox,oy,104,184);knob(13,L"D",ox,oy,146,184);knob(11,L"amt",ox,oy,188,184);
-    button(71,L"dest.",Kind::Cycle,ox,oy,36,220,52);
-    radio(71,ox,oy,131,220,{L"osc2",L"FM",L"p/w"},0,true);
-    knob(91,L"phase",ox,oy,238,201);knob(72,L"tune",ox,oy,282,201);
-    badge(lx+14,ly+30,L"1",57);badge(lx+298,ly+30,L"2",58);
-    controls_.push_back({Kind::Wave,42,0,lx+42-13,ly+30-8,26,17,L"",0});
-    controls_.push_back({Kind::Wave,47,0,lx+270-13,ly+30-8,26,17,L"",0});
-    button(41,L"dst",Kind::Cycle,lx,ly,78,30,32);
-    button(46,L"dst",Kind::Cycle,lx,ly,234,30,32);
-    knob(43,L"spd",lx,ly,30,62);knob(44,L"amt",lx,ly,76,62);
-    knob(48,L"spd",lx,ly,236,62);knob(49,L"amt",lx,ly,282,62);
-    label(lx+52,ly+99,L"-sync-");label(lx+260,ly+99,L"-sync-");
-    button(67,L"tempo",Kind::Toggle,lx,ly,32,114,56);
-    button(68,L"key",Kind::Toggle,lx,ly,84,114,36);
-    button(69,L"tempo",Kind::Toggle,lx,ly,236,114,56);
-    button(70,L"key",Kind::Toggle,lx,ly,288,114,36);
-    std::vector<std::wstring> dests={L"osc2",L"osc1,2",L"filter",L"amp",L"p/w",L"FM",L"pan"};
-    radio(41,lx,ly,124,72,dests,1);
-    radio(46,lx,ly,188,72,dests,1,true); // replaced below with vertical mirrored LEDs
-    controls_.erase(controls_.end()-int(dests.size()),controls_.end());
-    radio(46,lx,ly,188,72,dests,1,false,true);
-    for(int i=0;i<7;i++) label(lx+156,ly+72+(i-3)*13,dests[size_t(i)].c_str());
-    label(mx+32,my+28,L"p.b range"); display(40,mx,my,32,46,30);
-    label(mx+82,my+30,L"src1");label(mx+82,my+51,L"src2");
-    display(86,mx,my,158,30,120);display(88,mx,my,158,51,120);
-    label(mx+228,my+30,L"->");label(mx+228,my+51,L"->");
-    display(87,mx,my,298,30,120);display(89,mx,my,298,51,120);
-    knob(50,L"sens1",mx,my,400,34,22);knob(51,L"sens2",mx,my,446,34,22);
-    knob(25,L"A",ax,ay,20,40);knob(26,L"D",ax,ay,55,40);knob(27,L"S",ax,ay,90,40);
-    knob(28,L"R",ax,ay,125,40);knob(29,L"gain",ax,ay,162,40);knob(30,L"vel",ax,ay,198,40);
-    knob(15,L"A",fx,fy,20,44);knob(16,L"D",fx,fy,52,44);knob(17,L"S",fx,fy,84,44);
-    knob(18,L"R",fx,fy,116,44);knob(21,L"amt",fx,fy,150,44);
-    // Align Filter type with the upper Amount knob, shifting its LED list as one group.
-    button(14,L"type",Kind::Cycle,fx,fy,196,44,36);
-    radio(14,fx,fy,196,96,{L"LP12",L"LP24",L"HP12",L"BP12",L"LPDL"},0);
-    // Bottom Filter knobs align with the Oscillator Phase / Tune row.
-    knob(19,L"frq",fx,fy,20,117);knob(20,L"res",fx,fy,52,117);
-    knob(23,L"sat",fx,fy,84,117);knob(22,L"trk",fx,fy,116,117);
-    // Velocity toggle sits immediately above Track, not beside the bottom knob row.
-    button(24,L"vel",Kind::Toggle,fx,fy,116,84,36);
-    button(59,L"ON",Kind::Toggle,arx,ary,28,30,44);
-    button(31,L"type",Kind::Cycle,arx,ary,78,30);
-    button(32,L"range",Kind::Cycle,arx,ary,128,30,44);
-    radio(31,arx,ary,40,78,{L"updown",L"up",L"down",L"random"},1);
-    radio(32,arx,ary,126,78,{L"1oct",L"2oct",L"3oct",L"4oct"},0);
-    knob(33,L"beat",arx,ary,190,36);knob(34,L"gate",arx,ary,190,88);
-    // Effect uses the same stacked ON/type layout as Delay and Chorus.
-    button(77,L"ON",Kind::Toggle,ex,ey,25,31,40);
-    display(78,ex,ey,25,53,40); // +2px additional separation from ON.
-    knob(79,L"ctl1",ex,ey,108,40);knob(80,L"ctl2",ex,ey,150,40);knob(81,L"level",ex,ey,192,40);
-    knob(61,L"freq",qx,qy,24,31,22);knob(62,L"level",qx,qy,66,31,22);
-    knob(63,L"Q",qx,qy,108,31,22);knob(60,L"tone",qx,qy,150,31,22);knob(90,L"L-R",qx,qy,192,31,22);
-    // Stack the ON switch over its type display, matching the available
-    // 58px section height; the free horizontal space gives each FX knob
-    // a full, readable label and non-overlapping indicator dots.
-    // Leave a visible gap below the section header and between the two rows.
-    button(65,L"ON",Kind::Toggle,dx,dy,23,27,40);
-    display(82,dx,dy,23,47,40); // Keep type display fixed.
-    // Five knobs retain their horizontal spacing; move down 1px.
-    knob(35,L"time",dx,dy,68,31,22);knob(83,L"sprd",dx,dy,100,31,22);
-    knob(36,L"fdbk",dx,dy,132,31,22);knob(98,L"tone",dx,dy,164,31,22);knob(37,L"d/w",dx,dy,196,31,22);
-    button(66,L"ON",Kind::Toggle,cx,cy,23,27,40);
-    display(64,cx,cy,23,47,40); // Keep type display fixed.
-    knob(52,L"time",cx,cy,68,31,22);knob(53,L"depth",cx,cy,100,31,22);
-    knob(54,L"rate",cx,cy,132,31,22);knob(55,L"fdbk",cx,cy,164,31,22);knob(56,L"level",cx,cy,196,31,22);
-    radio(38,vx,vy,34,46,{L"poly",L"mono",L"legato"},0);
-    display(94,vx,vy,130,38,30);label(vx+130,vy+55,L"poly");
-    button(73,L"unison",Kind::Toggle,vx,vy,36,100,56);
-    label(vx+153,vy+77,L"portamento");
-    knob(39,L"",vx,vy,128,100);
-    button(74,L"auto",Kind::Toggle,vx,vy,176,100,46);
-    // Match lower Voice control row to the Wheel / MIDI Sens1/Sens2 centres.
-    display(93,vx,vy,24,144,26);label(vx+24,vy+161,L"num");
-    knob(75,L"det",vx,vy,68,142);knob(92,L"phase",vx,vy,106,142);
-    knob(84,L"sprd",vx,vy,144,142);knob(85,L"pitch",vx,vy,182,142);
-    knob(99,L"vol",6,484,19,29,26);
+    controls_.clear();
+    // ---- LFO
+    badge(11,92,L"1",57);
+    controls_.push_back({Kind::Wave,42,0,32,88,52,25,L"",0});
+    button(41,L"dst",Kind::Cycle,89,92,30,16);
+    knob(43,L"spd",25,136.5f,20,19);knob(44,L"amt",65,136.5f,20,19);
+    label(106.5f,123.5f,L"-sync-");
+    button(67,L"tempo",Kind::Check,84,131,44,13);
+    button(68,L"key",Kind::Check,84,145,44,13);
+    badge(11,184,L"2",58);
+    controls_.push_back({Kind::Wave,47,0,32,181,52,25,L"",0});
+    button(46,L"dst",Kind::Cycle,89,186,30,16);
+    knob(48,L"spd",26,230,20,19);knob(49,L"amt",65,230,20,19);
+    label(106.5f,217,L"-sync-");
+    button(69,L"tempo",Kind::Check,84,224,44,13);
+    button(70,L"key",Kind::Check,84,238,44,13);
+    label(134,89,L"LFO1");controls_.back().b=7.6f;controls_.back().symbol=1;
+    label(171,89,L"DESTINATION");controls_.back().b=7.6f;
+    label(206,89,L"LFO2");controls_.back().b=7.6f;controls_.back().symbol=1;
+    static const wchar_t* const dests[]={L"OSC2",L"OSC1,2",L"FILTER",L"AMP",L"P/W",L"FM",L"PAN"};
+    for(int i=0;i<7;i++) {
+        const float y=111.f+19.5f*float(i);
+        radio(41,i+1,L"",137.5f,y,0);radio(46,i+1,L"",204.f,y,0);
+        label(171,y,dests[i]);
+    }
+    // ---- oscillators
+    plate(L"OSC 1",232,89,36,15);
+    waves(0,290,316,88,103.5f,22,14,{0,1,2,3},{0,1,2,3});
+    knob(76,L"det",364,93,19,15.5f);knob(45,L"FM",397.5f,93,19,15.5f);
+    plate(L"SUB",232,124,36,15);
+    waves(96,290,316,129,145,22,14,{0,1,2,3},{0,3,1,5});
+    knob(95,L"level",364,132.5f,19,15.5f);
+    radio(97,0,L"0oct",398,129,407,50);radio(97,1,L"-1oct",398,143,407,50);
+    plate(L"OSC 2",232,168,36,15);
+    waves(1,285.5f,314.5f,167.5f,187,26,13,{1,2,3,4},{1,2,3,4});
+    button(7,L"ring",Kind::Toggle,328,170,28,13);
+    button(6,L"sync",Kind::Toggle,358,170,28,13);
+    button(4,L"track",Kind::Toggle,388,170,29,13);
+    knob(2,L"pitch",427.5f,174,19,15);knob(3,L"fine",456,174,19,15);
+    knob(5,L"mix",300,215,19,13);knob(8,L"p/w",331,215,19,13);
+    knob(91,L"phase",368,215,19,13);knob(72,L"tune",407,215,19,13);
+    display(9,434,204,29,19);label(448,228,L"key shift");
+    label(232,246,L"MOD ENV",true);
+    button(10,L"ON",Kind::Toggle,232,254,36,14);
+    button(71,L"dest.",Kind::Cycle,275,254,35,14);
+    knob(12,L"A",328,251.5f,18,14.5f);knob(13,L"D",364.5f,251.5f,18,14.5f);knob(11,L"amt",399,251.5f,18,14.5f);
+    radio(71,0,L"OSC2",433,243.5f,441,30);radio(71,1,L"FM",433,254.5f,441,30);radio(71,2,L"P/W",433,265,441,30);
+    // ---- filter (the response graph is drawn by drawFilterGraph)
+    knob(19,L"cutoff",516,186,34,25);knob(20,L"resonance",581,186,34,25);
+    button(14,L"type",Kind::Cycle,621,160,38,15);
+    static const wchar_t* const types[]={L"LP12",L"LP24",L"HP12",L"BP12",L"LPDL"};
+    for(int i=0;i<5;i++) radio(14,i,types[i],629,186.f+11.f*float(i),638,32);
+    knob(23,L"sat",509,244,16,16);knob(22,L"trk",543,244,16,16);
+    button(24,L"vel",Kind::Toggle,579,238,34,14);
+    // ---- envelopes
+    plate(L"FILTER",682.5f,110,34,16);plate(L"AMPLIFIER",679.5f,193,43,19,true);
+    static const wchar_t* const adsr[]={L"A",L"D",L"S",L"R"};
+    for(int i=0;i<4;i++) {
+        const float x=733.5f+26.f*float(i);
+        label(x,88,adsr[i]);controls_.back().b=10.f;fader(15+i,x,95,58);
+        label(x,173,adsr[i]);controls_.back().b=10.f;fader(25+i,x,181,58);
+    }
+    knob(21,L"amt",848.5f,111,20,20);
+    knob(29,L"gain",848.5f,194,19,19);knob(30,L"vel",848.5f,233.5f,16,15.5f);
+    // ---- voice
+    radio(38,0,L"poly",19,309.5f,27);radio(38,1,L"mono",19,322,27);radio(38,2,L"legato",19,334,27);
+    display(94,63,308,29,15);label(79,330,L"poly");
+    button(73,L"unison",Kind::Toggle,110,308,48,15);
+    display(93,126,330,29,15);label(140.5f,350.5f,L"num");
+    label(35,355,L"portamento");knob(39,L"",34,371,18,1);
+    button(74,L"auto",Kind::Toggle,62,356,39,14);
+    knob(75,L"det",33,399,18,15);knob(92,L"phase",71,399,18,15);
+    knob(84,L"sprd",106.5f,399,18,15);knob(85,L"pitch",142,399,18,15);
+    // ---- arpeggiator
+    button(59,L"ON",Kind::Toggle,180,308,35,15);
+    button(31,L"type",Kind::Cycle,222,308,33,15);
+    button(32,L"range",Kind::Cycle,262,308,33,15);
+    static const wchar_t* const arp[]={L"updown",L"up",L"down",L"random"};
+    static const wchar_t* const oct[]={L"1oct",L"2oct",L"3oct",L"4oct"};
+    static const float arpY[]={343,357,371,385};
+    for(int i=0;i<4;i++) {radio(31,i+1,arp[i],183,arpY[i],192,40);radio(32,i,oct[i],243,arpY[i],251,32);}
+    knob(33,L"beat",295,342.5f,18,15);knob(34,L"gate",295,381.5f,18,15);
+    // ---- wheel / midi
+    label(346,312,L"p.b range");display(40,372,306,28,14);
+    label(332,336.5f,L"src1");display(86,344,329,58,15);label(408,336.5f,L"->");display(87,414,329,60,15);
+    label(332,358.5f,L"src2");display(88,344,351.5f,58,15);label(408,358.5f,L"->");display(89,414,351.5f,60,15);
+    knob(50,L"sens1",367,393,19,18);knob(51,L"sens2",431,393,19,18);
+    // ---- effect, equalizer / pan, delay, chorus
+    button(77,L"ON",Kind::Toggle,495,306,36,15);display(78,494,327.5f,39,13.5f);
+    knob(79,L"ctl1",498,369,18,17);knob(80,L"ctl2",528,369,18,17);knob(81,L"level",554,369,18,17);
+    knob(61,L"freq",589,327,17,15);knob(62,L"level",615,327,17,15);knob(63,L"Q",640,327,17,15);
+    knob(60,L"tone",599,374.5f,17,18);knob(90,L"L-R",632,374.5f,17,18);
+    button(65,L"ON",Kind::Toggle,670,305,36,15);display(82,718.5f,305,37,15);
+    knob(35,L"time",679.5f,341.5f,18,16);knob(83,L"sprd",708,341.5f,18,16);knob(36,L"fdbk",743,341.5f,18,16);
+    knob(98,L"tone",695,381.5f,18,17);knob(37,L"d/w",730.5f,381.5f,18,17);
+    button(66,L"ON",Kind::Toggle,779,305,36,15);display(64,828,305,37,15);
+    knob(52,L"time",786.5f,341.5f,18,16);knob(53,L"depth",820,341.5f,18,16);knob(54,L"rate",852.5f,341.5f,18,16);
+    knob(55,L"fdbk",800,381.5f,18,17);knob(56,L"level",836,381.5f,18,17);
+    // ---- master volume (header)
+    label(697,14,L"vol");
+    knob(99,L"",723,14,16,1);
 }
 
+// The PLAY view (not in the mock-up): the performance controls at large size.
+void DesktopEditor::constructPlayLayout() {
+    controls_.clear();
+    // tone
+    knob(19,L"cutoff",62,125,46,34);knob(20,L"resonance",160,125,46,34);
+    knob(21,L"env amt",258,125,46,34);knob(23,L"sat",356,125,46,34);
+    static const wchar_t* const types[]={L"LP12",L"LP24",L"HP12",L"BP12",L"LPDL"};
+    label(24,214,L"FILTER TYPE",true);
+    for(int i=0;i<5;i++) radio(14,i,types[i],33.f+84.f*float(i),240,42.f+84.f*float(i),36);
+    // envelopes
+    plate(L"AMPLIFIER",470,84,70,16,true);plate(L"FILTER",655,84,70,16);
+    static const wchar_t* const adsr[]={L"A",L"D",L"S",L"R"};
+    for(int i=0;i<4;i++) {
+        const float xa=478.f+40.f*float(i), xf=663.f+40.f*float(i);
+        fader(25+i,xa,112,130);label(xa,252,adsr[i]);
+        fader(15+i,xf,112,130);label(xf,252,adsr[i]);
+    }
+    knob(29,L"gain",830,125,34,26);knob(30,L"vel",830,205,34,26);
+    // lfo
+    knob(43,L"spd 1",45,334,30,26);knob(44,L"amt 1",115,334,30,26);
+    knob(48,L"spd 2",185,334,30,26);knob(49,L"amt 2",255,334,30,26);
+    // effects
+    knob(81,L"effect",338,334,30,26);knob(62,L"eq",408,334,30,26);
+    knob(37,L"delay",478,334,30,26);knob(56,L"chorus",548,334,30,26);
+    // arp + master
+    button(59,L"ON",Kind::Toggle,606,302,44,16);
+    knob(33,L"beat",645,358,28,23);knob(34,L"gate",705,358,28,23);
+    button(73,L"unison",Kind::Toggle,606,325,64,16);
+    label(697,14,L"vol");
+    knob(99,L"",723,14,16,1);
+}
+
+void DesktopEditor::setView(View view) {
+    if(view_==view && !controls_.empty()) return;
+    view_=view;
+    closeTypeMenu();
+    if(view==View::Play) constructPlayLayout(); else constructLayout();
+    buildLearnRects();
+    hoveredControl_=-1;
+    staticDirty_=true;
+    repaint();
+}
 // SynthModel.applyTheme / setThemeColor: this instance wears it (session),
 // and it becomes the palette the next new instance starts with.
 void DesktopEditor::setTheme(const themes::Palette& palette,bool fromThemeEditor) {
@@ -647,7 +780,7 @@ void DesktopEditor::invalidate(const RectF& r) const {
 // is the selected one, the voice grid for voice mode / polyphony.
 void DesktopEditor::invalidateParam(int id) const {
     for(const auto& c:controls_) if(c.id==id) invalidate(bounds(c));
-    if(id==38 || id==94) invalidate(kGridRect);
+    if(id==38 || id==94) invalidate(kMeterRect);
 }
 void DesktopEditor::valueChanged(int id) {
     if(id>=0 && id<int(knownValues_.size())) knownValues_[size_t(id)]=value(id);
@@ -740,82 +873,110 @@ void DesktopEditor::drawLearn(Graphics& g) {
         }
     }
 }
+// The panel's own chrome buttons: the tabs, < >, search, write, menu, the
+// browser's bottom bar and Exit MIDI Learn.
 RectF DesktopEditor::chromeRect(int id) {
     switch(id) {
-    case 3: return {420,495,24,20};  case 4: return {449,495,24,20};
-    case 5: return {492,488,50,26};  case 6: return {492,522,50,26};
-    case 8: return {558,488,186,24}; case 9: return {514,38,84,20};
-    case 10: return {604,38,74,20};  case 11: return {430,38,66,20};
-    case 12: return {502,38,112,20}; case 13: return {620,38,60,20};
-    case 14: return {690,38,64,20};
+    case cTabEdit: return {17,31,57,19};   case cTabPlay: return {80,31,53,19};
+    case cTabBrowser: return {139,31,62,19};
+    case cPrev: return {215,5,22,19};      case cNext: return {493,5,22,19};
+    case cSearch: return {529,5,24,19};    case cWrite: return {570,5,40,19};
+    case cMenu: return {620,5,40,19};      case cLearnExit: return {692,31,178,19};
+    case cBrBankPrev: return {160.5f,418,21,17}; case cBrBankNext: return {189,418,22,17};
+    case cBrFolder: return {248,418,96,17};      case cBrRefresh: return {350,418,56,17};
+    case cBrImport: case cBrWrite: return {661,418,96,17};
+    case cBrExport: case cBrNewBank: return {767.5f,418,97,17};
     default: return {0,0,0,0};
     }
 }
-// The panel's own chrome buttons (< >, write, menu).
+bool DesktopEditor::tabSelected(int id) const {
+    if(id==cTabBrowser) return browser_;
+    return !browser_ && ((id==cTabEdit && view_==View::Edit) || (id==cTabPlay && view_==View::Play));
+}
 void DesktopEditor::drawChrome(Graphics& g,int id,bool hovered) {
     const auto& p=colors_;
     const RectF r=chromeRect(id);
-    const Color face=id==5 ? rgb(0xB81715) : p[kButton];
-    darkButton(g,face,r.X,r.Y,r.Width,r.Height,hovered);
-    if(id==3 || id==4) {
-        text(g,id==3?L"<":L">",r.X+1,r.Y,r.Width-3,r.Height,13,rgb(0xFFFFFF),true,true);
-    } else {
-        text(g,id==5?L"write":L"menu",r.X,r.Y,r.Width,r.Height,11,rgb(0xFFFFFF),true,true);
+    if(!visible(RectF(r.X-2,r.Y-2,r.Width+4,r.Height+4))) return;
+    const Color accent=p[kHeaderText];
+    if(id==cTabEdit || id==cTabPlay || id==cTabBrowser) {
+        const bool on=tabSelected(id);
+        const wchar_t* name=id==cTabEdit ? L"EDIT" : id==cTabPlay ? L"PLAY" : L"BROWSER";
+        if(on) {
+            GraphicsPath path;roundedPath(path,r.X,r.Y,r.Width,r.Height,3.5f);
+            LinearGradientBrush face(PointF(r.X,r.Y),PointF(r.X,r.Y+r.Height),blend(p[kPanel],accent,.52f),blend(p[kPanel],accent,.22f));
+            g.FillPath(&face,&path);
+            Pen edge(alpha(accent,235),1.2f);g.DrawPath(&edge,&path);
+            Pen glow(alpha(accent,60),2.6f);g.DrawPath(&glow,&path);
+        } else darkButton(g,p[kButton],r.X,r.Y,r.Width,r.Height,hovered);
+        text(g,name,r.X,r.Y,r.Width,r.Height,10,on ? accent : rgb(0xEEEEEE),true,true);
+        return;
     }
+    if(id==cSearch) {
+        darkButton(g,p[kButton],r.X,r.Y,r.Width,r.Height,hovered);
+        magnifier(g,rgb(0xEEEEEE),r.X+r.Width/2,r.Y+r.Height/2,13.f);
+        return;
+    }
+    const bool red=id==cWrite || id==cLearnExit;
+    darkButton(g,red ? rgb(id==cWrite ? 0xB81715 : 0xA30D0D) : p[kButton],r.X,r.Y,r.Width,r.Height,hovered);
+    const wchar_t* name=L"";
+    float size=9.5f;
+    switch(id) {
+    case cPrev: name=L"<";size=12;break;      case cNext: name=L">";size=12;break;
+    case cWrite: name=L"write";size=10;break; case cMenu: name=L"menu";size=10;break;
+    case cLearnExit: name=L"Exit MIDI Learn";size=10;break;
+    case cBrBankPrev: name=L"<";size=11;break; case cBrBankNext: name=L">";size=11;break;
+    case cBrFolder: name=L"LIBRARY FOLDER";break; case cBrRefresh: name=L"REFRESH";break;
+    case cBrImport: name=L"IMPORT BANK...";break; case cBrExport: name=L"EXPORT BANK...";break;
+    case cBrWrite: name=L"WRITE PATCH";break; case cBrNewBank: name=L"NEW BANK...";break;
+    default: break;
+    }
+    text(g,name,r.X,r.Y,r.Width,r.Height,size,rgb(0xFFFFFF),true,true);
 }
 
 void DesktopEditor::drawControlStatic(Graphics& g,const Control& c) {
     const auto& p=colors_;
     switch(c.kind) {
-    case Kind::Label:
-        text(g,c.label,c.x,c.y,c.w,c.h,9.5f,p[kLabel],false,true);
+    case Kind::Label: {
+        const bool accentInk=c.symbol==1;
+        const Color ink=accentInk ? p[kHeaderText] : p[kLabel];
+        const float size=c.b>0.f && c.a!=1.f ? c.b : c.b>1.f ? c.b : 9.0f;
+        text(g,c.label,c.x,c.y,c.w,c.h,size,ink,false,c.a!=1.f);
         return;
+    }
     case Kind::Knob: {
-        const float size=c.w/1.3f;
-        const float x=c.x+c.w/2, y=c.y+size*.65f;
-        // Theme.knobTicks: label ink at 30% opacity.
-        const SolidBrush dots(Color(77,p[kLabel].GetR(),p[kLabel].GetG(),p[kLabel].GetB()));
-        for(int i=0;i<11;i++) {
-            const float a=(-140+i*28-90)*kPi/180;
-            // Five closely-spaced FX knobs have 27px centre spacing.
-            // Keep their dot rings distinct without moving the panel geometry.
-            const float dotRing=size<=22.f ? size*.65f-2.3f : size*.65f-1.5f;
-            g.FillEllipse(&dots,x+std::cos(a)*dotRing-.8f,y+std::sin(a)*dotRing-.8f,1.6f,1.6f);
-        }
-        const float radius=size*.5f;
-        GraphicsPath circle;
-        circle.AddEllipse(x-radius,y-radius,size,size);
-        PathGradientBrush body(&circle);
-        body.SetCenterPoint(PointF(x-radius*.30f,y-radius*.38f));
-        body.SetCenterColor(p[kKnobHighlight]);
-        INT count=1;
-        Color surround[1]={p[kKnob]};
-        body.SetSurroundColors(surround,&count);
-        g.FillPath(&body,&circle);
-        Pen rim(muted(p[kPanel],.5f),1.f); // Theme.knobRim
-        g.DrawEllipse(&rim,x-radius,y-radius,size,size);
-        text(g,c.label,x-25,y+radius+1,50,12,9.5f,p[kLabel],false,true);
+        const float d=c.a;
+        const float x=c.x+c.w/2, y=c.y+d*.65f;
+        paintKnobBody(g,p,x,y,d);
+        text(g,c.label,x-34,y+c.b-6.f,68,12,9.0f,p[kLabel],false,true);
         return;
     }
     case Kind::Toggle:
-    case Kind::Cycle:
+    case Kind::Cycle: {
         darkButton(g,p[kButton],c.x,c.y,c.w,c.h);
-        text(g,c.label,c.x+(c.kind==Kind::Toggle?12.f:0.f),c.y,
-             c.w-(c.kind==Kind::Toggle?14.f:0.f),c.h,10.5f,rgb(0xE8E8E8),true,true);
-        return;
-    case Kind::Display: {
-        LinearGradientBrush lcd(PointF(c.x,c.y),PointF(c.x,c.y+c.h),p[kDisplayTop],p[kDisplayBottom]);
-        GraphicsPath lcdPath;roundedPath(lcdPath,c.x,c.y,c.w,c.h,2.f);
-        g.FillPath(&lcd,&lcdPath);
-        roundedOutline(g,rgb(0x0B0B0B),c.x,c.y,c.w,c.h,2.f);
+        const bool toggle=c.kind==Kind::Toggle;
+        const float size=c.w<30.f ? 7.0f : 9.0f;
+        const float lead=toggle ? (c.w<30.f ? 6.8f : 12.f) : 0.f;
+        text(g,c.label,c.x+lead,c.y,c.w-lead-1.f,c.h,size,rgb(0xEDEDED),true,true);
         return;
     }
+    case Kind::Check:
+        text(g,c.label,c.x+14.f,c.y,c.w-14.f,c.h,9.0f,p[kLabel],false,false);
+        return;
+    case Kind::Display:
+        displayTile(g,p,c.x,c.y,c.w,c.h);
+        return;
     case Kind::Radio:
-        if(c.id!=41 && c.id!=46) {
-            const float left=c.id==14 ? 13.f : (c.symbol ? 0.f : 15.f);
-            const float width=c.id==14 ? c.w-14.f : c.w-(c.symbol?14.f:16.f);
-            text(g,c.label,c.x+left,c.y,width,c.h,9.5f,p[kLabel],false,false);
-        }
+        if(c.id!=41 && c.id!=46) text(g,c.label,c.x+c.a,c.y,c.w-c.a,c.h,9.0f,p[kLabel],false,false);
+        return;
+    case Kind::Plate: {
+        const bool hi=c.symbol==1;
+        darkButton(g,hi ? blend(p[kButton],p[kHeaderText],.10f) : p[kButton],c.x,c.y,c.w,c.h);
+        if(hi) roundedOutline(g,alpha(p[kHeaderText],230),c.x+.5f,c.y+.5f,c.w-1.f,c.h-1.f,3.f,1.1f);
+        text(g,c.label,c.x,c.y,c.w,c.h,7.8f,hi ? p[kHeaderText] : rgb(0xEDEDED),true,true);
+        return;
+    }
+    case Kind::Fader:
+        paintFaderTrack(g,p,c.x+c.w/2,c.y+5.f,c.h-10.f);
         return;
     case Kind::Badge:
     case Kind::Wave:
@@ -825,64 +986,75 @@ void DesktopEditor::drawControlStatic(Graphics& g,const Control& c) {
 
 void DesktopEditor::drawControlDynamic(Graphics& g,const Control& c,bool hovered) {
     const auto& p=colors_;
+    const Color ledOff=blend(p[kPanel],p[kLabel],.36f);
     switch(c.kind) {
     case Kind::Label:
+    case Kind::Plate:
         return;
     case Kind::Badge: {
         const bool on=(c.id<0 || value(c.id)!=0);
-        darkButton(g,on?rgb(0x0F1111):rgb(0x393939),c.x,c.y,c.w,c.h,hovered);
-        // Move the four Osc/LFO badge digits down exactly one design pixel.
-        text(g,c.label,c.x,c.y+1.f,c.w,c.h-1.f,12,c.id<0?rgb(0xFFFFFF):
-             on?rgb(0xFFDA59):rgb(0x777777),true,true);
+        const Color accent=p[kHeaderText];
+        GraphicsPath path;roundedPath(path,c.x,c.y,c.w,c.h,2.5f);
+        SolidBrush fillBrush(on ? blend(p[kPanel],accent,.16f) : blend(p[kPanel],rgb(0),.25f));
+        g.FillPath(&fillBrush,&path);
+        Pen edge(on ? alpha(accent,hovered?255:220) : blend(p[kPanel],accent,hovered?.5f:.32f),1.1f);
+        g.DrawPath(&edge,&path);
+        text(g,c.label,c.x,c.y+.5f,c.w,c.h,10.5f,on ? accent : blend(p[kPanel],accent,.5f),true,true);
         return;
     }
     case Kind::Knob: {
-        const float size=c.w/1.3f, radius=size*.5f;
-        const float x=c.x+c.w/2, y=c.y+size*.65f;
+        const float d=c.a;
         int low=0,high=127,def=64;
         if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,c.id,&low,&high,&def);
         const float frac=std::clamp((float(value(c.id))-float(low))/float(std::max(1,high-low)),0.f,1.f);
-        // SwiftUI uses a short capsule near the rim, not a red line from
-        // the knob's centre. Match its -140 to +140 degree travel.
-        const float angle=(-140+280*frac-90)*kPi/180;
-        const float dx=std::cos(angle), dy=std::sin(angle);
-        Pen hand(p[kDial],2.f);
-        hand.SetStartCap(LineCapRound);hand.SetEndCap(LineCapRound);
-        g.DrawLine(&hand,PointF(x+dx*radius*.18f,y+dy*radius*.18f),
-                   PointF(x+dx*radius*.84f,y+dy*radius*.84f));
+        paintKnobPointer(g,p,c.x+c.w/2,c.y+d*.65f,d,frac);
         return;
     }
     case Kind::Toggle:
     case Kind::Cycle:
         if(hovered) {
             darkButton(g,p[kButton],c.x,c.y,c.w,c.h,true);
-            text(g,c.label,c.x+(c.kind==Kind::Toggle?12.f:0.f),c.y,
-                 c.w-(c.kind==Kind::Toggle?14.f:0.f),c.h,10.5f,rgb(0xE8E8E8),true,true);
+            const bool toggle=c.kind==Kind::Toggle;
+            const float lead=toggle ? (c.w<30.f ? 6.8f : 12.f) : 0.f;
+            text(g,c.label,c.x+lead,c.y,c.w-lead-1.f,c.h,c.w<30.f ? 7.0f : 9.0f,rgb(0xEDEDED),true,true);
         }
         if(c.kind==Kind::Toggle) {
             const bool on=value(c.id)!=0;
-            led(g,on?p[kLed]:muted(p[kLed],.3f),c.x+8,c.y+c.h/2,2.8f,on);
+            led(g,on?p[kLed]:ledOff,c.x+(c.w<30.f?6.5f:8.f),c.y+c.h/2,c.w<30.f?2.2f:2.9f,on);
         }
         return;
+    case Kind::Check: {
+        const bool on=value(c.id)!=0;
+        led(g,on?p[kLed]:ledOff,c.x+6.5f,c.y+c.h/2,3.f,on);
+        return;
+    }
     case Kind::Display: {
         std::wstring v=formatted(c.id);
-        if(c.id==9 || c.id==40) { // 2-digit displays, as in SynthPanelView.swift
+        float size=10.5f;
+        if(c.id==9 || c.id==40) { // 2-digit displays
             wchar_t out[32];std::swprintf(out,32,L"%02d",value(c.id));v=out;
-        }
-        text(g,v,c.x+1,c.y+1,c.w-2,c.h-2,11,p[kDisplayText],true,true,true);
+            size=12.5f;
+        } else if(c.id>=86 && c.id<=89) size=8.2f;
+        else if(c.id==94 || c.id==93) size=12.f;
+        text(g,v,c.x+1,c.y+.5f,c.w-2,c.h-1,size,p[kDisplayText],true,true,true);
         return;
     }
     case Kind::Radio: {
         const bool on=value(c.id)==c.value;
         const bool justLed=(c.id==41 || c.id==46);
-        const float ledx=justLed ? c.x+c.w*.5f : c.symbol ? c.x+c.w-7.f : c.x+7.f;
-        // All red selector LEDs gain 2px diameter: radius 3.4 -> 4.4.
-        led(g,on?p[kRadio]:muted(p[kRadio],.42f),ledx,c.y+c.h/2,4.4f,on);
+        led(g,on?p[kRadio]:ledOff,justLed ? c.x+c.w*.5f : c.x+7.f,c.y+c.h/2,3.3f,on);
         return;
     }
     case Kind::Wave:
         drawWave(g,c);
         return;
+    case Kind::Fader: {
+        int low=0,high=127,def=64;
+        if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,c.id,&low,&high,&def);
+        const float frac=std::clamp((float(value(c.id))-float(low))/float(std::max(1,high-low)),0.f,1.f);
+        paintFaderCap(g,c.x+c.w/2,c.y+5.f,c.h-10.f,frac);
+        return;
+    }
     }
 }
 
@@ -940,26 +1112,25 @@ static void drawWaveShape(Graphics& g,Pen& pen,int shape,float x,float y,float w
 }
 void DesktopEditor::drawWave(Graphics& g,const Control& c) {
     const auto& p=colors_;
-    const bool on=(value(c.id)==c.value) || (c.id==42||c.id==47);
-    // Original WaveCell: FLAT fill (no gradient), 2 px corner radius.
-    const Color waveFace=on?p[kDisplayText]:p[kButton];
-    // Original WaveCell glows only while selected. Three thin, low-alpha
-    // rings add a soft 2px aura without changing button dimensions.
-    if(on) {
-        const BYTE r=waveFace.GetR(),green=waveFace.GetG(),b=waveFace.GetB();
-        roundedOutline(g,Color(20,r,green,b),c.x-2.5f,c.y-2.5f,c.w+5.f,c.h+5.f,4.5f,1.5f);
-        roundedOutline(g,Color(35,r,green,b),c.x-1.5f,c.y-1.5f,c.w+3.f,c.h+3.f,3.5f,1.2f);
-        roundedOutline(g,Color(55,r,green,b),c.x-.5f,c.y-.5f,c.w+1.f,c.h+1.f,2.5f,1.f);
+    const bool lfo=(c.id==42||c.id==47);
+    const bool on=(value(c.id)==c.value) || lfo;
+    const Color ink=p[kDisplayText];
+    if(lfo) displayTile(g,p,c.x,c.y,c.w,c.h,true);
+    else {
+        // a lit tile glows; the others stay in the display's dark.
+        if(on) {
+            roundedOutline(g,alpha(ink,28),c.x-2.f,c.y-2.f,c.w+4.f,c.h+4.f,4.5f,1.8f);
+            roundedOutline(g,alpha(ink,55),c.x-1.f,c.y-1.f,c.w+2.f,c.h+2.f,3.5f,1.2f);
+        }
+        displayTile(g,p,c.x,c.y,c.w,c.h,on);
     }
-    roundedFill(g,waveFace,c.x,c.y,c.w,c.h,2.f);
-    roundedOutline(g,Color(170,0,0,0),c.x,c.y,c.w,c.h,2.f);
-    // Slightly stronger strokes, while preserving the original shape paths.
-    Pen pen(on ? rgb(0x101719) : rgb(0xDDDDDD),1.7f);
+    Pen pen(on ? ink : alpha(ink,125),lfo ? 1.9f : 1.5f);
     pen.SetStartCap(LineCapRound);pen.SetEndCap(LineCapRound);
     pen.SetLineJoin(LineJoinRound);
-    const float x=c.x+4,y=c.y+3.5f,w=c.w-8,h=c.h-7;
+    const float padX=lfo ? 8.f : 4.5f, padY=lfo ? 5.f : 3.f;
+    const float x=c.x+padX,y=c.y+padY,w=c.w-2*padX,h=c.h-2*padY;
     int shape=c.symbol;
-    if(c.id==42 || c.id==47) {
+    if(lfo) {
         constexpr int cycleShapes[]={6,3,5,7,8,0};
         shape=cycleShapes[std::clamp(value(c.id),0,5)];
     }
@@ -1054,125 +1225,210 @@ void DesktopEditor::drawTypeMenu(Graphics& g) {
     g.DrawRectangle(&border,r.X+.5f,r.Y+.5f,r.Width-1.f,r.Height-1.f);
 }
 
+// The filter's magnitude response in dB at `hz`, from the engine's own
+// laws (EngineCore/Filter.hpp): knob -> cutoff Hz, the SVF's damping for
+// LP12 / HP12 / BP12, the Moog-style feedback for LP24, a softer feedback
+// for the diode ladder. Display only; it never touches the sound.
+static float filterResponseDb(int type,int cutoffKnob,int resKnob,float hz) {
+    const float fc=16.7f*std::exp2(std::min(float(cutoffKnob),125.f)/12.624f);
+    const float x=hz/fc, r=std::clamp(float(resKnob)/127.f,0.f,1.f);
+    float mag=1.f;
+    if(type==1 || type==4) { // LP24 / LPDL: 4 one-pole stages with global feedback
+        const float k=std::max(0.f,(0.0297f*float(resKnob)-0.076f))*(type==1 ? 1.f : .72f);
+        // (1 + jx)^4 + k
+        const float re1=1.f, im1=x;
+        float re=re1, im=im1;
+        for(int i=0;i<3;i++) {const float nr=re*re1-im*im1, ni=re*im1+im*re1;re=nr;im=ni;}
+        re+=k;
+        mag=1.f/std::max(1e-4f,std::sqrt(re*re+im*im));
+    } else { // 2-pole state variable
+        const float d=std::max(.025f,1.f-r), gain=1.f-.7f*r;
+        const float re=1.f-x*x, im=d*x;
+        const float den=std::max(1e-4f,std::sqrt(re*re+im*im));
+        mag=(type==2 ? x*x : type==3 ? x : 1.f)/den*gain;
+    }
+    return 20.f*std::log10(std::max(mag,1e-5f));
+}
+void DesktopEditor::drawFilterGraph(Graphics& g,bool frameOnly) {
+    const auto& p=colors_;
+    const RectF plot(503,84,163,57);
+    const Color ink=p[kDisplayText];
+    if(frameOnly) {
+        displayTile(g,p,483,81,185,75);
+        // dB lines + the frequency grid
+        Pen grid(alpha(ink,36),.7f);
+        static const wchar_t* const db[]={L"+12",L"0",L"-12",L"-24",L"-36"};
+        for(int i=0;i<5;i++) {
+            const float y=plot.Y+plot.Height*float(i)/4.f;
+            g.DrawLine(&grid,plot.X,y,plot.X+plot.Width,y);
+            text(g,db[i],484,y-6.f,19,12,7.8f,alpha(p[kLabel],215),false,false);
+        }
+        static const struct {float hz;const wchar_t* name;} marks[]={{20,L"20"},{50,L"50"},{100,L"100"},{200,L"200"},
+            {500,L"500"},{1000,L"1k"},{2000,L"2k"},{5000,L"5k"},{10000,L"10k"}};
+        for(const auto& m:marks) {
+            const float x=plot.X+plot.Width*std::log10(m.hz/20.f)/3.f;
+            g.DrawLine(&grid,x,plot.Y,x,plot.Y+plot.Height);
+            text(g,m.name,std::clamp(x,plot.X+7.f,plot.X+plot.Width-8.f)-12.f,plot.Y+plot.Height+1.5f,24,10,7.6f,alpha(p[kLabel],215),false,true);
+        }
+        return;
+    }
+    const int type=value(14), cutoff=value(19), res=value(20);
+    constexpr int n=96;
+    PointF pts[n+3];
+    auto yOf=[&](float dB) {return plot.Y+plot.Height*(12.f-std::clamp(dB,-36.f,12.f))/48.f;};
+    for(int i=0;i<n;i++) {
+        const float t=float(i)/float(n-1);
+        const float hz=20.f*std::pow(1000.f,t);
+        pts[i]=PointF(plot.X+plot.Width*t,yOf(filterResponseDb(type,cutoff,res,hz)));
+    }
+    pts[n]=PointF(plot.X+plot.Width,plot.Y+plot.Height);
+    pts[n+1]=PointF(plot.X,plot.Y+plot.Height);
+    const GraphicsState saved=g.Save();
+    g.SetClip(plot,CombineModeReplace);
+    LinearGradientBrush area(PointF(0,plot.Y),PointF(0,plot.Y+plot.Height),alpha(ink,100),alpha(ink,18));
+    g.FillPolygon(&area,pts,n+2);
+    Pen curve(ink,1.6f);
+    curve.SetLineJoin(LineJoinRound);
+    g.DrawLines(&curve,pts,n);
+    g.Restore(saved);
+}
+
 void DesktopEditor::drawStatic(Graphics& g) {
     const auto& p=colors_;
-    fill(g,p[kPanel],0,0,kDesignWidth,kDesignHeight);
-    text(g,L"Synth2",8,5,94,23,20,p[kLabel],true);
-    text(g,L"Virtual Analog",84,7,135,20,12,muted(p[kLabel],.75f));
-    // SynthPanelView's version box: "V1.1.2(6)  a Synth1 recreation" (the
-    // build only when known), from Identity.xcconfig; sized to its text
-    // (10 px each side), right edge fixed.
-    const int build=std::atoi(OXO_BUILD_NUMBER);
-    const std::wstring version=L"V"+toWide(OXO_VERSION)+(build>0 ? L"("+std::to_wstring(build)+L")" : L"")+
-        L"  a Synth1 recreation";
-    const float ink=textCache_ ? textCache_->get(version,10.8f,400.f,false).ink.Width : 160.f; // text()'s size for 10
-    const float boxWidth=std::clamp(ink+20.f,168.f,400.f);
-    versionLeft_=761.f-boxWidth;
-    fill(g,rgb(0xAD0F0C),versionLeft_,5,boxWidth,20);
-    stroke(g,rgb(0x101010),versionLeft_,5,boxWidth,20);
-    text(g,version,versionLeft_+3,6,boxWidth-6,18,10,rgb(0xFFFFFF),true,true);
-    struct Section {float x,y,w,h;const wchar_t* name;};
-    static constexpr Section sections[]={
-        {6,34,312,240,L"Oscillators"},{6,278,312,130,L"LFO"},
-        {6,412,536,66,L"Wheel / MIDI"},{324,34,218,80,L"Amplifier"},
-        {324,118,218,156,L"Filter"},{324,278,218,130,L"Arpeggiator"},
-        {548,34,216,80,L"Effect"},{548,118,216,58,L"Equalizer / Pan"},
-        {548,180,216,58,L"Tempo Delay"},{548,242,216,58,L"Chorus / Flanger"},
-        {548,304,216,174,L"Voice"},
-    };
-    for(const auto& sec:sections) {
-        // Header fill meets the section border exactly, with no one-pixel
-        // panel-colour gutter between the title band and its outline.
-        fill(g,p[kHeader],sec.x,sec.y,sec.w,16.f);
-        stroke(g,muted(p[kHeader],.6f),sec.x,sec.y,sec.w,sec.h);
-        text(g,sec.name,sec.x+5,sec.y,sec.w-10,16,12,p[kHeaderText],true);
+    // background: the panel colour with a soft vignette
+    {
+        LinearGradientBrush bg(PointF(0,0),PointF(0,kDesignHeight),blend(p[kPanel],rgb(0xFFFFFF),.03f),blend(p[kPanel],rgb(0x000000),.22f));
+        g.FillRectangle(&bg,0.f,0.f,kDesignWidth,kDesignHeight);
     }
-    Pen div(muted(p[kHeader],.45f),.8f);
-    static constexpr float dividers[][4]={{180,56,180,110},{14,115,310,115},{218,121,218,268},{14,197,210,197}};
-    for(const auto& a:dividers) g.DrawLine(&div,a[0],a[1],a[2],a[3]);
+    // header bar and tab row
+    {
+        LinearGradientBrush bar(PointF(0,0),PointF(0,27),blend(p[kPanel],rgb(0x000000),.22f),blend(p[kPanel],rgb(0x000000),.46f));
+        g.FillRectangle(&bar,0.f,0.f,kDesignWidth,27.f);
+        fill(g,blend(p[kPanel],rgb(0x000000),.58f),0,27.5f,kDesignWidth,25.5f);
+        Pen line(blend(p[kPanel],p[kLabel],.2f),1.f);
+        g.DrawLine(&line,0.f,27.5f,kDesignWidth,27.5f);
+        Pen line2(Color(220,3,4,4),1.f);
+        g.DrawLine(&line2,0.f,52.5f,kDesignWidth,52.5f);
+        text(g,L"Synth2",15,1,86,25,20,blend(p[kLabel],rgb(0xE8D5B0),.35f),true);
+        Pen sep(alpha(p[kLabel],70),1.f);
+        g.DrawLine(&sep,101.f,6.f,101.f,21.f);
+        text(g,L"Virtual Analog",110,5,100,17,10.8f,muted(p[kLabel],.82f));
+        displayTile(g,p,kLcdRect.X,kLcdRect.Y,kLcdRect.Width,kLcdRect.Height);
+        g.DrawLine(&sep,675.f,6.f,675.f,23.f);
+        text(g,L"VOICES",740,6,44,17,7.6f,muted(p[kLabel],.9f),false,true);
+        g.DrawLine(&sep,210.f,33.f,210.f,48.f);
+    }
+    struct Section {float x,y,w,h;const wchar_t* name;};
+    static constexpr Section editSections[]={
+        {5,60,214,213,L"LFO"},{224,60,250,213,L"OSCILLATORS"},{479,60,192,213,L"FILTER"},{676,60,197,213,L"ENVELOPES"},
+        {5,284,163,139,L"VOICE"},{173,284,140,139,L"ARPEGGIATOR"},{318,284,162,139,L"WHEEL / MIDI"},
+        {485,284,84,139,L"EFFECT"},{574,284,81,139,L"EQ / PAN"},{660,284,102,139,L"TEMPO DELAY"},
+        {767,284,106,139,L"CHORUS / FLANGER"},
+    };
+    static constexpr Section playSections[]={
+        {5,60,436,213,L"TONE"},{446,60,427,213,L"ENVELOPES"},{5,284,290,139,L"LFO"},
+        {300,284,290,139,L"EFFECTS"},{595,284,278,139,L"ARPEGGIATOR"},
+    };
+    const bool edit=view_==View::Edit;
+    const Section* sections=edit ? editSections : playSections;
+    const size_t count=edit ? std::size(editSections) : std::size(playSections);
+    for(size_t i=0;i<count;i++) {
+        const auto& sec=sections[i];
+        sectionPlate(g,p,sec.x,sec.y,sec.w,sec.h);
+        text(g,sec.name,sec.x+9,sec.y,sec.w-12,19,9.6f,p[kHeaderText],true);
+    }
+    if(edit) {
+        // dividers
+        rule(g,p,9,169.5f,122,169.5f);
+        for(const float y:{116.f,157.f,197.5f,236.f}) rule(g,p,230,y,468,y);
+        rule(g,p,314,238,314,272);
+        rule(g,p,484,227,565,227);rule(g,p,569,234,569,261);
+        rule(g,p,679,162.5f,870,162.5f);
+        rule(g,p,106.5f,306,106.5f,382);rule(g,p,9,346,100,346);rule(g,p,9,383,162,383);
+        rule(g,p,230,335,230,395);
+        rule(g,p,333,375,475,375);
+        // the LFO destination matrix
+        roundedFill(g,rgb(0x08090B),126.5f,99,89,140,4.f);
+        roundedOutline(g,blend(p[kPanel],p[kLabel],.2f),126.5f,99,89,140,4.f);
+        Pen row(alpha(p[kLabel],36),.8f);
+        for(int i=0;i<6;i++) {
+            const float y=111.f+19.5f*float(i)+9.75f;
+            g.DrawLine(&row,131.f,y,211.f,y);
+        }
+        drawFilterGraph(g,true);
+    } else {
+        rule(g,p,15,205,430,205);
+    }
     for(const auto& c:controls_) drawControlStatic(g,c);
-    // Original LCD + write/menu + voice grid geometry from Shared/SynthLibraryViews.swift.
-    LinearGradientBrush lcd(PointF(50,484),PointF(50,554),p[kDisplayTop],p[kDisplayBottom]);
-    GraphicsPath mainLcd;roundedPath(mainLcd,50,484,432,70,4.f);
-    g.FillPath(&lcd,&mainLcd);
-    roundedOutline(g,rgb(0x070707),50,484,432,70,4.f,1.5f);
-    for(const int id:{3,4,5,6}) drawChrome(g,id,false);
+    // version / project link
+    text(g,L"Synth2 V"+toWide(OXO_VERSION)+L"  -  a Synth1 recreation",8,426,240,16,8.6f,alpha(p[kLabel],95),false,false);
     // Small bottom-right host-resize grip. All drawing scales as one canvas.
-    Pen grip(blend(p[kPanel],p[kLabel],.65f),1.f);
+    Pen grip(blend(p[kPanel],p[kLabel],.5f),1.f);
     for(int i=0;i<3;i++) {
-        const float a=float(i*5);
-        g.DrawLine(&grip,752.f+a,557.f,767.f,542.f+a);
+        const float a=float(i*4);
+        g.DrawLine(&grip,kDesignWidth-17.f+a,kDesignHeight-3.f,kDesignWidth-3.f,kDesignHeight-17.f+a);
     }
 }
 
 void DesktopEditor::drawDynamic(Graphics& g) {
     const auto& p=colors_;
-    // The browser covers the whole panel area: only the bottom bar shows.
+    // The browser covers the panel area below the tabs: only the header's
+    // controls (volume) show through.
     for(size_t i=0;i<controls_.size();++i) {
         const auto& c=controls_[i];
-        if((browser_ && c.y<kBrowserRect.Y+kBrowserRect.Height) || !visible(bounds(c))) continue;
+        if((browser_ && c.y+c.h>kBrowserRect.Y+4.f) || !visible(bounds(c))) continue;
         drawControlDynamic(g,c,hoveredControl_==int(i));
     }
+    if(!browser_ && view_==View::Edit && visible(kGraphRect)) drawFilterGraph(g,false);
     if(midiLearn_ && !browser_) drawLearn(g);
-    for(const int id:{3,4,5,6})
-        if(hoveredChrome_==id) drawChrome(g,id,true);
-    if(visible(kLcdRect)) {
-        int loadedBank=-1,loadedSlot=-1;
+    for(const int id:{cTabEdit,cTabPlay,cTabBrowser,cPrev,cNext,cSearch,cWrite,cMenu})
+        drawChrome(g,id,hoveredChrome_==id);
+    int loadedBank=-1,loadedSlot=-1;
+    if(visible(kLcdRect) || visible(kBankLineRect)) {
         if(knownRevision_>0 && hooks_.loadedProgram)
             hooks_.loadedProgram(hooks_.ctx,&loadedBank,&loadedSlot);
         loadedBankForPaint_=loadedBank;
         loadedSlotForPaint_=loadedSlot;
+    }
+    if(visible(kLcdRect)) {
         const int prefix=(loadedSlot>=0 ? loadedSlot+1 : 0);
         wchar_t formattedNumber[16];
         if(prefix) std::swprintf(formattedNumber,16,L"%03d: ",prefix);
         else std::wcscpy(formattedNumber,L"---: ");
-        text(g,std::wstring(formattedNumber)+patchName(),60,489,330,25,17,rgb(0xDFFAFF),true,false,true);
-        std::wstring second=flashText_;
-        if(second.empty()) {
-            if(loadedBank>=0 && loadedBank<int(banks_.size())) {
-                wchar_t num[16];std::swprintf(num,16,L"%02d: ",displayBankNumber(loadedBank));
-                second=std::wstring(num)+banks_[size_t(loadedBank)].leaf;
-            } else second=knownRevision_>0 ? L"Click here to browse banks" : L"Scanning preset banks...";
-        }
-        text(g,second,60,526,392,23,13,p[kDisplayText],false,false,true);
+        text(g,std::wstring(formattedNumber)+patchName(),240,4.5f,250,21,14.5f,p[kDisplayText],true,true,true);
     }
     if(!midiLearn_) {
-        if(visible(kGridRect)) {
+        if(visible(kBankLineRect)) {
+            std::wstring second=flashText_;
+            Color ink=p[kDisplayText];
+            if(second.empty()) {
+                ink=p[kLabel];
+                if(loadedBank>=0 && loadedBank<int(banks_.size())) {
+                    wchar_t num[16];std::swprintf(num,16,L"%02d: ",displayBankNumber(loadedBank));
+                    second=std::wstring(num)+banks_[size_t(loadedBank)].leaf;
+                } else second=knownRevision_>0 ? L"Click the preset name to browse banks" : L"Scanning preset banks...";
+            }
+            text(g,second,218,31,kBankLineRect.Width-8,19,10.5f,ink,false,false,true);
+        }
+        if(visible(kMeterRect)) {
             const uint64_t states=hooks_.voiceStates ? hooks_.voiceStates(hooks_.ctx) : 0;
             // Poly shows the allowed voice count; Mono and Legato show one
-            // allocated square. Playing/released voices remain visible in all modes.
+            // allocated cell. Playing / released voices show in every mode.
             const int allocated=value(38)==0 ? std::clamp(value(94),1,32) : 1;
-            constexpr float cell=215.f/16.f;
-            // Vertically centre the two-row grid beside the Write/Menu button pair.
-            const float left=kGridRect.X,top=kGridRect.Y;
-            constexpr float inset=1.75f; // clear gap from the grid lines
-            // VoiceGrid (Shared/SynthLibraryViews.swift): white = held, gray =
-            // releasing, black = available, empty = past the polyphony; lines =
-            // label ink at 12%. Not theme colours.
-            static const Color held=rgb(0xFFFFFF),releasing=rgb(0x8C8C8C),available=rgb(0x000000);
+            const float cw=kMeterRect.Width/16.f, ch=kMeterRect.Height/2.f;
             for(int i=0;i<32;i++) {
                 const int state=int((states>>(i*2))&3);
-                const Color* color=state==2?&held:state==1?&releasing:i<allocated?&available:nullptr;
-                if(color) {
-                    const float x=left+(i%16)*cell, y=top+(i/16)*cell;
-                    fill(g,*color,x+inset,y+inset,cell-2*inset,cell-2*inset);
-                }
-            }
-            // Draw one continuous grid instead of 32 overlapping rectangles.
-            Pen grid(Color(31,p[kLabel].GetR(),p[kLabel].GetG(),p[kLabel].GetB()),1.f);
-            for(int column=0;column<=16;column++) {
-                const float x=left+column*cell+.5f;
-                g.DrawLine(&grid,x,top,x,top+2*cell);
-            }
-            for(int row=0;row<=2;row++) {
-                const float y=top+row*cell+.5f;
-                g.DrawLine(&grid,left,y,left+16*cell,y);
+                const float x=kMeterRect.X+float(i%16)*cw, y=kMeterRect.Y+float(i/16)*ch;
+                Color color=blend(p[kPanel],rgb(0),.55f);
+                if(state==2) color=p[kLed];
+                else if(state==1) color=blend(p[kPanel],p[kLed],.45f);
+                else if(i<allocated) color=blend(p[kPanel],p[kLabel],.16f);
+                roundedFill(g,color,x+.7f,y+.8f,cw-1.4f,ch-1.6f,.8f);
             }
         }
     } else {
-        darkButton(g,rgb(0xA30D0D),558,488,186,24,hoveredChrome_==8);
-        text(g,L"Exit MIDI Learn",558,488,186,24,11,rgb(0xFFFFFF),true,true);
-        text(g,L"Select a control, then move a MIDI CC",548,518,206,20,9,p[kLabel],true,true);
+        drawChrome(g,cLearnExit,hoveredChrome_==cLearnExit);
+        text(g,L"Select a control, then move a MIDI CC",218,31,470,19,9.5f,p[kLabel],true,false);
     }
     if(browser_ && visible(kBrowserRect)) drawBrowser(g);
     drawTypeMenu(g);
@@ -1263,7 +1519,7 @@ void DesktopEditor::refreshBanks() {
         auto it=std::find(slots.begin(),slots.end(),"");
         selectedSlot_=it==slots.end()?0:int(it-slots.begin());
     }
-    bankScroll_=std::clamp(bankScroll_,0,std::max(0,bankRowCount()-20));
+    bankScroll_=std::clamp(bankScroll_,0,std::max(0,bankRowCount()-kBankRows));
     repaint();
 }
 int DesktopEditor::userBank() const {
@@ -1284,7 +1540,7 @@ int DesktopEditor::bankRowOf(int bank) const {
 }
 void DesktopEditor::scrollBankIntoView(int bank) {
     const int row=bankRowOf(bank);
-    if(row>=0 && (row<bankScroll_ || row>=bankScroll_+20)) bankScroll_=std::max(0,row-19);
+    if(row>=0 && (row<bankScroll_ || row>=bankScroll_+kBankRows)) bankScroll_=std::max(0,row-kBankRows+1);
 }
 int DesktopEditor::bankBySource(const std::string& source) const {
     for(size_t i=0;i<banks_.size();i++) if(banks_[i].source==source) return int(i);
@@ -1333,23 +1589,95 @@ void DesktopEditor::closeBrowser() {
     updateEditControl();
     repaint();
 }
+// The patch's category column. The library has no category data, so it is
+// read from the name (keywords), falling back to "Synth".
+std::wstring DesktopEditor::categoryOf(const std::string& name) {
+    std::wstring w=toWide(name.c_str());
+    for(auto& ch:w) ch=wchar_t(std::towlower(ch));
+    struct Rule {const wchar_t* key;const wchar_t* category;};
+    static constexpr Rule rules[]={
+        {L"string",L"Strings"},{L"orchestr",L"Strings"},{L"violin",L"Strings"},{L"cello",L"Strings"},
+        {L"pad",L"Pads"},{L"atmos",L"Pads"},{L"ambient",L"Pads"},{L"choir",L"Pads"},{L"warm",L"Pads"},
+        {L"bass",L"Bass"},{L"sub ",L"Bass"},{L"lead",L"Leads"},{L"solo",L"Leads"},{L"sync",L"Leads"},
+        {L"brass",L"Brass"},{L"horn",L"Brass"},{L"trumpet",L"Brass"},{L"organ",L"Keys"},
+        {L"piano",L"Keys"},{L"keys",L"Keys"},{L"clav",L"Keys"},{L"rhodes",L"Keys"},{L"bell",L"Keys"},
+        {L"pluck",L"Plucks"},{L"harp",L"Plucks"},{L"guitar",L"Plucks"},{L"arp",L"Arp"},{L"seq",L"Arp"},
+        {L"sweep",L"Motion"},{L"motion",L"Motion"},{L"wobble",L"Motion"},{L"evolv",L"Motion"},
+        {L"fx",L"FX"},{L"noise",L"FX"},{L"effect",L"FX"},{L"riser",L"FX"},{L"hit",L"FX"},
+        {L"drum",L"Drums"},{L"kick",L"Drums"},{L"snare",L"Drums"},{L"hat",L"Drums"},{L"perc",L"Drums"},
+    };
+    for(const auto& r:rules) if(w.find(r.key)!=std::wstring::npos) return r.category;
+    return L"Synth";
+}
+// The patches the preset list shows: the shown bank's slots, or, while
+// searching, only the named patches whose name or category match.
+std::vector<int> DesktopEditor::shownSlots() const {
+    std::vector<int> out;
+    const bool fresh=writing_ && selectedBank_==kNewUserBank;
+    int count=-1;
+    if(fresh) count=s2::kBankSlots;
+    else if(selectedBank_>=0 && selectedBank_<int(banks_.size())) count=int(banks_[size_t(selectedBank_)].slots.size());
+    if(count<=0) return out;
+    std::wstring query=searchText_;
+    for(auto& ch:query) ch=wchar_t(std::towlower(ch));
+    for(int i=0;i<count;i++) {
+        if(fresh || query.empty()) {out.push_back(i);continue;}
+        const std::string& name=banks_[size_t(selectedBank_)].slots[size_t(i)];
+        if(name.empty()) continue;
+        std::wstring hay=toWide(name.c_str())+L" "+categoryOf(name);
+        for(auto& ch:hay) ch=wchar_t(std::towlower(ch));
+        if(hay.find(query)!=std::wstring::npos) out.push_back(i);
+    }
+    return out;
+}
+// Typing in the browser fills the search box (the write dialog's name
+// field has the keyboard instead).
+bool DesktopEditor::searchKey(wchar_t ch) {
+    if(!browser_ || writing_) return false;
+    if(ch==8) {
+        if(searchText_.empty()) return true;
+        searchText_.pop_back();
+    } else if(ch>=32 && ch!=127) {
+        if(searchText_.size()>=40) return true;
+        searchText_.push_back(ch);
+    } else return false;
+    slotScroll_=0;
+    invalidate(kBrowserRect);
+    return true;
+}
+void DesktopEditor::stepBank(int direction) {
+    const int n=int(bankOrder_.size());
+    if(n==0) return;
+    int row=bankRowOf(selectedBank_);
+    if(row<0) row=direction>0 ? -1 : n;
+    for(int guard=0;guard<n;guard++) {
+        row+=direction;
+        if(row<0 || row>=n) return;
+        const int bank=bankOrder_[size_t(row)];
+        if(writing_ && banks_[size_t(bank)].readOnly) continue;
+        selectedBank_=bank;selectedSlot_=-1;slotScroll_=0;
+        if(writing_) {
+            const auto& slots=banks_[size_t(bank)].slots;
+            const auto it=std::find(slots.begin(),slots.end(),"");
+            selectedSlot_=it==slots.end() ? 0 : int(it-slots.begin());
+        }
+        scrollBankIntoView(bank);
+        repaint();
+        return;
+    }
+}
 int DesktopEditor::bankRowAt(float x,float y) const {
-    if(x<7 || x>=196 || y<64 || y>469) return -1;
-    const int visual=bankScroll_+int((y-64)/20);
+    if(x<kBankPanel.X+2 || x>=kBankPanel.X+kBankPanel.Width-2 || y<kBankTop || y>=kBankTop+kBankRowH*float(kBankRows)) return -1;
+    const int visual=bankScroll_+int((y-kBankTop)/kBankRowH);
     if(visual>=0 && visual<int(bankOrder_.size())) return bankOrder_[size_t(visual)];
     return visual==int(bankOrder_.size()) && offersNewUserBank() ? kNewUserBank : -1;
 }
 int DesktopEditor::slotAt(float x,float y) const {
-    if(x<204 || x>=760 || y<64 || y>469) return -1;
-    int count=-1;
-    if(writing_ && selectedBank_==kNewUserBank) count=s2::kBankSlots;
-    else if(selectedBank_>=0 && selectedBank_<int(banks_.size())) count=int(banks_[size_t(selectedBank_)].slots.size());
-    if(count<=0) return -1;
-    const int rows=std::max(1,(count+3)/4);
-    const int row=slotScroll_+int((y-64)/20);
-    if(row>=rows) return -1; // below a short grid, not the next column
-    const int index=std::clamp(int((x-204)/138.5f),0,3)*rows+row;
-    return index<count ? index : -1;
+    if(x<kPresetPanel.X+6 || x>=kPresetPanel.X+kPresetPanel.Width-14 ||
+       y<kPresetTop || y>=kPresetTop+kPresetRowH*float(kPresetRows)) return -1;
+    const auto shown=shownSlots();
+    const int at=slotScroll_+int((y-kPresetTop)/kPresetRowH);
+    return at>=0 && at<int(shown.size()) ? shown[size_t(at)] : -1;
 }
 
 // Right click in the browser = PatchBrowserView's libraryMenu: a bank =
@@ -1454,104 +1782,194 @@ int DesktopEditor::displayBankNumber(int bank) const {
     return row>=0 ? row : bank;
 }
 bool DesktopEditor::isVersionBox(float x,float y) const {
-    return x>=versionLeft_ && x<762.f && y>=2.f && y<31.f;
+    return x>=6.f && x<250.f && y>=424.f && y<444.f;
 }
 
 void DesktopEditor::drawBrowser(Graphics& g) {
     const auto& p=colors_;
-    // As the Mac browser: selected rows = display text colour behind
-    // display-bottom ink; other names in Theme.lcdText (empty slots at 30%).
-    const Color selectionFill=p[kDisplayText];
-    const Color selectionInk=p[kDisplayBottom];
-    const Color nameInk=rgb(kLcdText);
-    const Color emptyInk=blend(p[kDisplayBottom],nameInk,.3f);
-    // Numbering is warm yellow on dark rows and dark gold on pale selections.
-    // Keep the bank/preset names in their existing theme colours.
-    const Color numberInk=rgb(0xE9D56A);
-    const Color selectedNumberInk=rgb(0x816000);
-    const float x=6,y=34,w=758,h=444;
-    fill(g,p[kPanel],x,y,w,h);
-    stroke(g,p[kHeader],x,y,w,h,1.5f);
-    fill(g,p[kHeader],x+1,y+1,w-2,27);
-    text(g,writing_?L"Write patch":L"Banks",x+7,y+2,135,24,12,p[kHeaderText],true);
-    if(writing_) {
-        darkButton(g,p[kButton],514,38,84,20,hoveredChrome_==9);
-        text(g,L"Write patch",514,38,84,20,10,rgb(0xFFFFFF),true,true);
-        darkButton(g,p[kButton],604,38,74,20,hoveredChrome_==10);
-        text(g,L"New bank...",604,38,74,20,10,rgb(0xFFFFFF),true,true);
-    } else {
-        darkButton(g,p[kButton],430,38,66,20,hoveredChrome_==11);
-        text(g,L"Import...",430,38,66,20,10,rgb(0xFFFFFF),true,true);
-        darkButton(g,p[kButton],502,38,112,20,hoveredChrome_==12);
-        text(g,L"Library folder",502,38,112,20,10,rgb(0xFFFFFF),true,true);
-        darkButton(g,p[kButton],620,38,60,20,hoveredChrome_==13);
-        text(g,L"Refresh",620,38,60,20,10,rgb(0xFFFFFF),true,true);
+    const Color accent=p[kHeaderText];
+    const Color ink=p[kLabel];
+    const Color numberInk=blend(p[kPanel],ink,.62f);
+    const Color emptyInk=blend(p[kPanel],ink,.34f);
+    // The browser covers everything under the tab row.
+    {
+        LinearGradientBrush bg(PointF(0,53),PointF(0,kDesignHeight),blend(p[kPanel],rgb(0xFFFFFF),.03f),blend(p[kPanel],rgb(0x000000),.22f));
+        g.FillRectangle(&bg,0.f,53.f,kDesignWidth,kDesignHeight-53.f);
     }
-    darkButton(g,p[kButton],690,38,64,20,hoveredChrome_==14);
-    text(g,L"Close",690,38,64,20,10,rgb(0xFFFFFF),true,true);
-    fill(g,p[kDisplayBottom],x+1,y+28,190,h-30);
-    fill(g,p[kDisplayBottom],x+191,y+28,w-192,h-30);
-    stroke(g,p[kHeader],x+190,y+28,1,h-30);
-    constexpr float row=20;
-    const int visualCount=bankRowCount(); // the banks (+ new User)
-    for(int i=0;i<20;i++) {
+    sectionPlate(g,p,kBankPanel.X,kBankPanel.Y,kBankPanel.Width,kBankPanel.Height,24.f);
+    sectionPlate(g,p,kPresetPanel.X,kPresetPanel.Y,kPresetPanel.Width,kPresetPanel.Height,24.f);
+    sectionPlate(g,p,kPreviewPanel.X,kPreviewPanel.Y,kPreviewPanel.Width,kPreviewPanel.Height,24.f);
+    text(g,writing_?L"BANKS (choose where to write)":L"BANKS",kBankPanel.X+10,kBankPanel.Y,kBankPanel.Width-12,24,10.4f,accent,true);
+    text(g,writing_?L"WRITE PATCH":L"PRESETS",kPresetPanel.X+10,kPresetPanel.Y,95,24,10.4f,accent,true);
+    text(g,L"PATCH PREVIEW",kPreviewPanel.X+10,kPreviewPanel.Y,kPreviewPanel.Width-12,24,10.4f,accent,true);
+
+    // --- banks
+    const int visualCount=bankRowCount();
+    for(int i=0;i<kBankRows;i++) {
         const int visual=bankScroll_+i;
-        if(visual<0 || visual>=visualCount)break;
+        if(visual<0 || visual>=visualCount) break;
         const int bi=visual<int(bankOrder_.size()) ? bankOrder_[size_t(visual)] : kNewUserBank;
-        const bool isNewUser=bi==kNewUserBank;
-        const float ry=64+row*i;
-        if(bi==selectedBank_)fill(g,selectionFill,8,ry,187,19);
-        int count=0;
-        if(bi>=0)
-            for(const auto& slot:banks_[size_t(bi)].slots)if(!slot.empty())++count;
-        wchar_t prefix[12];std::swprintf(prefix,12,L"%02d:",visual);
-        const Color bankText=bi==selectedBank_?selectionInk:nameInk;
-        // the bank to be made has no number yet
-        text(g,isNewUser?L"--:":prefix,12,ry,27,18,10.5f,
-             bi==selectedBank_?selectedNumberInk:numberInk,false,false,true);
-        text(g,isNewUser?toWide(s2::kUserBankName):banks_[size_t(bi)].leaf,
-             39,ry,kBankNameW,18,kBankNameSize,bankText,false,false,true);
-        text(g,isNewUser?L"new":std::to_wstring(count),164,ry,30,18,10.5f,bankText,false,true,true);
-        if(bi>=0 && bi==dropBank_) stroke(g,p[kDisplayText],8.75f,ry+.75f,185.5f,17.5f,1.5f); // copy target
+        const bool isNew=bi==kNewUserBank;
+        const bool selected=bi==selectedBank_;
+        const bool locked=!isNew && banks_[size_t(bi)].readOnly;
+        const float ry=kBankTop+kBankRowH*float(i), rx=kBankPanel.X+6.f, rw=kBankPanel.Width-12.f;
+        if(selected) {
+            roundedFill(g,alpha(accent,52),rx,ry,rw,kBankRowH-1.f,3.f);
+            roundedOutline(g,alpha(accent,230),rx+.5f,ry+.5f,rw-1.f,kBankRowH-2.f,3.f,1.1f);
+        }
+        // the folder
+        const Color folder=selected||!locked ? accent : blend(p[kPanel],ink,.55f);
+        Pen fp(folder,1.05f);
+        g.DrawRectangle(&fp,rx+7.f,ry+5.f,12.f,8.f);
+        g.DrawLine(&fp,rx+7.f,ry+5.f,rx+9.5f,ry+3.2f);g.DrawLine(&fp,rx+9.5f,ry+3.2f,rx+12.f,ry+3.2f);g.DrawLine(&fp,rx+12.f,ry+3.2f,rx+13.5f,ry+5.f);
+        wchar_t prefix[16];
+        if(isNew) std::swprintf(prefix,16,L"--: ");
+        else std::swprintf(prefix,16,L"%02d: ",visual);
+        const std::wstring name=isNew ? toWide(s2::kUserBankName)+L" (new)" : banks_[size_t(bi)].leaf;
+        text(g,std::wstring(prefix)+name,rx+24.f,ry,rw-26.f,kBankRowH,10.f,selected ? accent : p[kLabel],false,false);
+        if(bi>=0 && bi==dropBank_) roundedOutline(g,p[kDisplayText],rx+.5f,ry+.5f,rw-1.f,kBankRowH-2.f,3.f,1.6f);
     }
+    // a bank list too long for its panel: a slim scroll bar
+    if(visualCount>kBankRows) {
+        const float trackY=kBankTop,trackH=kBankRowH*float(kBankRows);
+        const float thumbH=std::max(18.f,trackH*float(kBankRows)/float(visualCount));
+        const float thumbY=trackY+(trackH-thumbH)*float(bankScroll_)/float(std::max(1,visualCount-kBankRows));
+        roundedFill(g,rgb(0x08090B),kBankPanel.X+kBankPanel.Width-6.f,trackY,3.f,trackH,1.5f);
+        roundedFill(g,blend(p[kPanel],ink,.45f),kBankPanel.X+kBankPanel.Width-6.f,thumbY,3.f,thumbH,1.5f);
+    }
+
+    // --- presets: the search box, the table header, the rows
+    roundedFill(g,rgb(0x0B0C0E),kSearchBox.X,kSearchBox.Y,kSearchBox.Width,kSearchBox.Height,4.f);
+    roundedOutline(g,blend(p[kPanel],ink,.22f),kSearchBox.X+.5f,kSearchBox.Y+.5f,kSearchBox.Width-1.f,kSearchBox.Height-1.f,4.f);
+    magnifier(g,ink,kSearchBox.X+13.f,kSearchBox.Y+kSearchBox.Height/2,12.f);
+    if(searchText_.empty() || writing_)
+        text(g,L"SEARCH PRESETS... (type)",kSearchBox.X+27.f,kSearchBox.Y,kSearchBox.Width-34.f,kSearchBox.Height,9.4f,emptyInk,false,false);
+    else {
+        text(g,searchText_,kSearchBox.X+27.f,kSearchBox.Y,kSearchBox.Width-34.f,kSearchBox.Height,10.f,rgb(0xFFFFFF),false,false,true);
+        const auto& shape=textCache_->get(searchText_,textFontSize(10.f),kSearchBox.Width-36.f,true);
+        const float cx=std::min(kSearchBox.X+29.f+shape.ink.Width+1.f,kSearchBox.X+kSearchBox.Width-8.f);
+        fill(g,accent,cx,kSearchBox.Y+4.f,1.f,kSearchBox.Height-8.f);
+    }
+    const float tableX=kPresetPanel.X+6.f, tableW=kPresetPanel.Width-12.f;
+    fill(g,rgb(0x0E0F11),tableX,kSearchBox.Y+kSearchBox.Height+5.f,tableW,16.f);
+    text(g,L"NO.",tableX+8.f,111,30,16,9.2f,ink,true);
+    text(g,L"PRESET",tableX+55.f,111,100,16,9.2f,ink,true);
+    text(g,L"CATEGORY",tableX+245.f,111,80,16,9.2f,ink,true);
+    fill(g,rgb(0x08090B),tableX,kPresetTop,tableW,kPresetRowH*float(kPresetRows));
     if(knownRevision_<=0) {
-        text(g,L"Scanning preset banks in the background...",204,90,510,30,12,rgb(0xC1DCE0));
-        return;
-    }
-    if(selectedBank_==-1) {
-        text(g,L"Select a bank.",204,90,510,30,12,rgb(0xC1DCE0));
-        return;
-    }
-    const bool newUserView=writing_ && selectedBank_==kNewUserBank; // all slots free
-    if(!newUserView && (selectedBank_<0 || selectedBank_>=int(banks_.size())))return;
-    const int count=newUserView?s2::kBankSlots:int(banks_[size_t(selectedBank_)].slots.size());
-    const int rows=std::max(1,(count+3)/4);
-    const int loadedPairBank=loadedBankForPaint_;
-    const int loadedPairSlot=loadedSlotForPaint_;
-    for(int rr=0;rr<20;rr++) {
-        const int br=rr+slotScroll_;
-        if(br>=rows)break;
-        for(int col=0;col<4;col++) {
-            const int slotIndex=col*rows+br;
-            if(slotIndex>=count)continue;
-            const float x0=204.f+float(col)*138.5f;
-            const float y0=65.f+float(rr)*20.f;
-            const std::string label=newUserView ? std::string() : banks_[size_t(selectedBank_)].slots[size_t(slotIndex)];
+        text(g,L"Scanning preset banks in the background...",tableX+12,kPresetTop+10,300,18,10.5f,rgb(0xC1DCE0));
+    } else if(selectedBank_==-1) {
+        text(g,L"Select a bank.",tableX+12,kPresetTop+10,300,18,10.5f,rgb(0xC1DCE0));
+    } else if(selectedBank_==kNewUserBank || (selectedBank_>=0 && selectedBank_<int(banks_.size()))) {
+        const auto shown=shownSlots();
+        const bool fresh=selectedBank_==kNewUserBank;
+        if(shown.empty() && !searchText_.empty())
+            text(g,L"No presets match.",tableX+12,kPresetTop+10,300,18,10.5f,rgb(0xC1DCE0));
+        int loadedBank=loadedBankForPaint_, loadedSlot=loadedSlotForPaint_;
+        for(int r=0;r<kPresetRows;r++) {
+            const int at=slotScroll_+r;
+            if(at>=int(shown.size())) break;
+            const int slot=shown[size_t(at)];
+            const float ry=kPresetTop+kPresetRowH*float(r);
+            const std::string label=fresh ? std::string() : banks_[size_t(selectedBank_)].slots[size_t(slot)];
             const bool valid=!label.empty();
-            const bool selected=writing_ ? slotIndex==selectedSlot_ :
-                (valid && selectedBank_==loadedPairBank && slotIndex==loadedPairSlot);
-            fill(g,selected?selectionFill:p[kDisplayBottom],x0,y0,136,18);
-            wchar_t prefix[16];
-            std::swprintf(prefix,16,L"%03d:",slotIndex+1);
-            text(g,prefix,x0+3,y0,35,18,10.2f,
-                 selected?selectedNumberInk:numberInk,false,false,true);
-            text(g,toWide(label.c_str()),x0+39,y0,93,18,10.2f,
-                 selected?selectionInk:valid?nameInk:emptyInk,false,false,true);
-            if(slotIndex==dropSlot_) roundedOutline(g,p[kDisplayText],x0+.75f,y0+.75f,134.5f,16.5f,2.f,1.5f); // move target
+            const bool selected=writing_ ? slot==selectedSlot_ : (valid && selectedBank_==loadedBank && slot==loadedSlot);
+            if(r%2==1) fill(g,rgb(0x0C0D0F),tableX,ry,tableW-9.f,kPresetRowH);
+            if(selected) {
+                roundedFill(g,alpha(accent,60),tableX+1.f,ry,tableW-11.f,kPresetRowH,2.f);
+                roundedOutline(g,alpha(accent,235),tableX+1.5f,ry+.5f,tableW-12.f,kPresetRowH-1.f,2.f,1.1f);
+            }
+            wchar_t number[8];std::swprintf(number,8,L"%03d",slot+1);
+            const Color rowInk=selected ? rgb(0xFFFFFF) : valid ? p[kLabel] : emptyInk;
+            text(g,number,tableX+8.f,ry,36,kPresetRowH,9.6f,selected ? accent : numberInk,false,false,true);
+            text(g,toWide(label.c_str()),tableX+55.f,ry,185,kPresetRowH,9.8f,rowInk,false,false,true);
+            if(valid) text(g,categoryOf(label),tableX+245.f,ry,110,kPresetRowH,9.4f,selected ? rgb(0xFFFFFF) : blend(p[kPanel],ink,.8f),false,false);
+            if(slot==dropSlot_) roundedOutline(g,p[kDisplayText],tableX+1.5f,ry+.5f,tableW-12.f,kPresetRowH-1.f,2.f,1.6f);
+        }
+        const int total=int(shown.size());
+        if(total>kPresetRows) {
+            const float trackH=kPresetRowH*float(kPresetRows);
+            const float thumbH=std::max(20.f,trackH*float(kPresetRows)/float(total));
+            const float thumbY=kPresetTop+(trackH-thumbH)*float(slotScroll_)/float(std::max(1,total-kPresetRows));
+            roundedFill(g,rgb(0x15171A),tableX+tableW-8.f,kPresetTop,5.f,trackH,2.5f);
+            roundedFill(g,blend(p[kPanel],ink,.5f),tableX+tableW-8.f,thumbY,5.f,thumbH,2.5f);
         }
     }
-    if(writing_ && selectedBank_>=0 && banks_[size_t(selectedBank_)].readOnly)
-        text(g,L"Factory bank is read-only. Choose a user bank.",213,445,490,19,10,rgb(0xE2A3A3));
+    if(writing_ && selectedBank_>=0 && selectedBank_<int(banks_.size()) && banks_[size_t(selectedBank_)].readOnly)
+        text(g,L"Factory bank is read-only. Choose a user bank.",kPresetPanel.X+10,kPresetTop+kPresetRowH*float(kPresetRows)+2,330,14,9.2f,rgb(0xE2A3A3));
+
+    // --- patch preview: the LOADED patch (clicking a preset loads it)
+    {
+        const float px=kPreviewPanel.X, pw=kPreviewPanel.Width;
+        int lb=-1,ls=-1;
+        if(knownRevision_>0 && hooks_.loadedProgram) hooks_.loadedProgram(hooks_.ctx,&lb,&ls);
+        const bool known=lb>=0 && lb<int(banks_.size()) && ls>=0 && ls<int(banks_[size_t(lb)].slots.size());
+        std::wstring bankName=known ? banks_[size_t(lb)].leaf : L"-";
+        std::wstring patchName_=known ? slotText(lb,ls) : this->patchName();
+        if(known) {wchar_t n[8];std::swprintf(n,8,L"%02d: ",displayBankNumber(lb));bankName=n+bankName;}
+        text(g,L"BANK",px+10,86,50,16,9.4f,ink,false,false);
+        text(g,L":",px+58,86,8,16,9.4f,ink,false,false);
+        text(g,bankName,px+68,86,pw-76,16,10.4f,p[kDisplayText],false,false,true);
+        text(g,L"PATCH",px+10,103,50,16,9.4f,ink,false,false);
+        text(g,L":",px+58,103,8,16,9.4f,ink,false,false);
+        text(g,patchName_,px+68,103,pw-76,16,10.4f,p[kDisplayText],false,false,true);
+        rule(g,p,px+8,122,px+pw-8,122);
+        auto plate=[&](const wchar_t* label,float x,float y,float w,float h,bool hi) {
+            darkButton(g,hi ? blend(p[kButton],accent,.10f) : p[kButton],x,y,w,h);
+            if(hi) roundedOutline(g,alpha(accent,230),x+.5f,y+.5f,w-1.f,h-1.f,3.f,1.1f);
+            text(g,label,x,y,w,h,8.4f,hi ? accent : rgb(0xEDEDED),true,true);
+        };
+        auto oscTile=[&](int id,float y,const wchar_t* label) {
+            plate(label,px+14,y+8,46,17,false);
+            const float tx=px+72,tw=pw-82;
+            displayTile(g,p,tx,y,tw,34.f,true);
+            Pen pen(p[kDisplayText],1.8f);
+            pen.SetStartCap(LineCapRound);pen.SetEndCap(LineCapRound);pen.SetLineJoin(LineJoinRound);
+            const int v=std::clamp(value(id),0,4);
+            static constexpr int shapes[]={0,1,2,3,4};
+            drawWaveShape(g,pen,shapes[v],tx+12,y+6,tw-24,22);
+        };
+        oscTile(0,130.f,L"OSC 1");
+        oscTile(1,172.f,L"OSC 2");
+        rule(g,p,px+8,216,px+pw-8,216);
+        plate(L"FILTER",px+14,239,48,18,false);
+        for(const int id:{19,20}) {
+            const float cx=id==19 ? px+124.f : px+207.f, cy=246.f, d=30.f;
+            paintKnobBody(g,p,cx,cy,d);
+            int low=0,high=127,def=64;
+            if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,id,&low,&high,&def);
+            paintKnobPointer(g,p,cx,cy,d,std::clamp(float(value(id)-low)/float(std::max(1,high-low)),0.f,1.f));
+            text(g,id==19 ? L"cutoff" : L"resonance",cx-40,cy+22,80,13,9.0f,ink,false,true);
+        }
+        rule(g,p,px+8,288,px+pw-8,288);
+        plate(L"AMPLIFIER",px+14,323,62,19,true);
+        static constexpr const wchar_t* adsr[]={L"A",L"D",L"S",L"R"};
+        for(int i=0;i<4;i++) {
+            const float cx=px+109.f+40.5f*float(i);
+            text(g,adsr[i],cx-10,294,20,13,9.4f,ink,false,true);
+            paintFaderTrack(g,p,cx,312.f,62.f);
+            int low=0,high=127,def=64;
+            if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,25+i,&low,&high,&def);
+            paintFaderCap(g,cx,312.f,62.f,std::clamp(float(value(25+i)-low)/float(std::max(1,high-low)),0.f,1.f));
+        }
+    }
+
+    // --- bottom bar
+    roundedFill(g,blend(p[kPanel],rgb(0x000000),.38f),kBottomBar.X,kBottomBar.Y,kBottomBar.Width,kBottomBar.Height,4.f);
+    roundedOutline(g,blend(p[kPanel],ink,.2f),kBottomBar.X+.5f,kBottomBar.Y+.5f,kBottomBar.Width-1.f,kBottomBar.Height-1.f,4.f);
+    text(g,L"BANK POSITION",kBottomBar.X+14,kBottomBar.Y,112,kBottomBar.Height,10.4f,accent,true);
+    {
+        const int row=bankRowOf(selectedBank_), last=std::max(0,int(bankOrder_.size())-1);
+        wchar_t pos[32];
+        if(row>=0 && row<int(bankOrder_.size())) std::swprintf(pos,32,L"%02d / %02d",row,last);
+        else std::swprintf(pos,32,L"-- / %02d",last);
+        text(g,pos,kBottomBar.X+104,kBottomBar.Y,60,kBottomBar.Height,10.2f,rgb(0xFFFFFF),false,false,true);
+        Pen sep(alpha(ink,70),1.f);
+        g.DrawLine(&sep,215.f,418.f,215.f,436.f);
+    }
+    for(const int id:{cBrBankPrev,cBrBankNext,cBrFolder,cBrRefresh}) drawChrome(g,id,hoveredChrome_==id);
+    if(writing_) for(const int id:{cBrWrite,cBrNewBank}) drawChrome(g,id,hoveredChrome_==id);
+    else for(const int id:{cBrImport,cBrExport}) drawChrome(g,id,hoveredChrome_==id);
 }
 
 void DesktopEditor::setValueOnce(int id,int v) {
@@ -1625,29 +2043,35 @@ void DesktopEditor::commitWrite() {
 }
 
 // Keys (SynthModel.browserKey, fed by WM_KEYDOWN and IPlugView::onKeyDown):
-// Esc cancels a drag / closes the browser / leaves MIDI learn; with the
-// browser open, up / down = previous / next patch (rolling into the
-// neighbouring banks, as < >), left / right = the neighbouring column
-// (nearest patch), Return / Enter close; in the write dialog Return /
-// Enter write. With Ctrl / Alt / Win held, and the arrows with the browser
-// closed (as the mac): the host's. False = not ours.
+// Esc cancels a drag / clears the search / closes the browser / leaves MIDI
+// learn; with the browser open, up / down = previous / next patch (rolling
+// into the neighbouring banks, as < >), left / right = the previous / next
+// bank, Backspace edits the search, Return / Enter close; in the write
+// dialog Return / Enter write. With Ctrl / Alt / Win held, and the arrows
+// with the browser closed: the host's. False = not ours.
 bool DesktopEditor::keyDown(UINT key) {
     dismissBankTip();
     if((GetKeyState(VK_CONTROL)|GetKeyState(VK_MENU)|GetKeyState(VK_LWIN)|GetKeyState(VK_RWIN))&0x8000) return false;
     if(key==VK_ESCAPE) {
         if(typeMenu_>=0) closeTypeMenu();
         else if(press_.active) dragEnd(false);
+        else if(browser_ && !searchText_.empty() && !writing_) {searchText_.clear();slotScroll_=0;invalidate(kBrowserRect);}
         else if(browser_) closeBrowser();
         else if(midiLearn_) setLearn(false);
         else return false;
         return true;
     }
     if(!browser_) return false;
+    if(key==VK_BACK) return searchKey(8);
+    // Typed text goes to the search box (the characters arrive as WM_CHAR /
+    // onKeyDown's char): the key itself stays with us, not the host's.
+    if(!writing_ && ((key>=0x30 && key<=0x5A) || key==0x20 || (key>=0xBA && key<=0xDF))) return true;
     if(key==VK_RETURN) {
         if(writing_) commitWrite(); else closeBrowser();
         return true;
     }
     if(writing_ || (key!=VK_UP && key!=VK_DOWN && key!=VK_LEFT && key!=VK_RIGHT)) return false;
+    if(key==VK_LEFT || key==VK_RIGHT) {stepBank(key==VK_RIGHT?1:-1);return true;}
     if(selectedBank_<0 || selectedBank_>=int(banks_.size())) return true;
     const auto& slots=banks_[size_t(selectedBank_)].slots;
     int loadedBank=-1,loadedSlot=-1;
@@ -1657,15 +2081,7 @@ bool DesktopEditor::keyDown(UINT key) {
         if(first!=slots.end()) loadSlot(selectedBank_,int(first-slots.begin()));
         return true;
     }
-    if(key==VK_UP || key==VK_DOWN) {stepPatch(key==VK_DOWN?1:-1);return true;}
-    const int count=int(slots.size()), rows=std::max(1,(count+3)/4);
-    const int col=loadedSlot/rows+(key==VK_RIGHT?1:-1);
-    if(col<0 || col*rows>=count) return true;
-    const int wanted=col*rows+loadedSlot%rows;
-    int best=-1;
-    for(int s=col*rows;s<std::min((col+1)*rows,count);s++)
-        if(!slots[size_t(s)].empty() && (best<0 || std::abs(s-wanted)<std::abs(best-wanted))) best=s;
-    if(best>=0) loadSlot(selectedBank_,best);
+    stepPatch(key==VK_DOWN?1:-1);
     return true;
 }
 tresult PLUGIN_API DesktopEditor::onKeyDown(char16 key,int16 keyCode,int16 modifiers) {
@@ -1674,6 +2090,7 @@ tresult PLUGIN_API DesktopEditor::onKeyDown(char16 key,int16 keyCode,int16 modif
 #endif
     if(nameFieldKey(key,keyCode,modifiers)) return kResultTrue; // typing in the write dialog's name
     if(modifiers&(kAlternateKey|kCommandKey|kControlKey)) return kResultFalse;
+    if(browser_ && !writing_ && key>=32 && key!=127) return searchKey(wchar_t(key)) ? kResultTrue : kResultFalse;
     UINT vk=0;
     switch(keyCode) {
     case KEY_UP: vk=VK_UP;break;       case KEY_DOWN: vk=VK_DOWN;break;
@@ -1690,51 +2107,93 @@ void DesktopEditor::loadSlot(int bank,int slot) {
     if(bank!=selectedBank_) slotScroll_=0;
     selectedBank_=bank;selectedSlot_=slot;
     scrollBankIntoView(bank);
-    const int rows=std::max(1,(int(banks_[size_t(bank)].slots.size())+3)/4), row=slot%rows;
-    if(row<slotScroll_) slotScroll_=row; else if(row>=slotScroll_+20) slotScroll_=row-19;
+    const auto shown=shownSlots();
+    const auto it=std::find(shown.begin(),shown.end(),slot);
+    if(it!=shown.end()) {
+        const int row=int(it-shown.begin());
+        if(row<slotScroll_) slotScroll_=row; else if(row>=slotScroll_+kPresetRows) slotScroll_=row-kPresetRows+1;
+    }
     repaint();
 }
 
-void DesktopEditor::browserClick(float x,float y,bool doubleClick) {
-    if(y>=37 && y<=61) {
-        if(x>=690 && x<760) {closeBrowser();return;}
-        if(writing_) {
-            if(x>=514 && x<601) {commitWrite();return;}
-            if(x>=604 && x<680) {
-                // SynthModel.newBank: a uniquely named folder, then write into it.
-                if(!hooks_.newBank) return;
-                askText(L"New bank",L"Bank name:",L"New Bank",[this](const std::wstring& name) {
-                    const int bank=hooks_.newBank(hooks_.ctx,toUtf8(name).c_str());
-                    if(bank<0) {
-                        messageBox(L"Cannot create that bank. Check the library folder is writable.",
-                                   L"Synth2",MB_ICONWARNING);
-                        return;
-                    }
-                    if(hooks_.libraryRevision) knownRevision_=hooks_.libraryRevision(hooks_.ctx);
-                    refreshBanks();
-                    if(bank<int(banks_.size())) {selectedBank_=bank;selectedSlot_=0;slotScroll_=0;}
-                    repaint();
-                });
-                return;
-            }
-        } else {
-            if(x>=430 && x<498) {POINT p;GetCursorPos(&p);showImportDialog(p.x,p.y);return;}
-            if(x>=502 && x<617) {
-                if(hooks_.libraryRoot) {
-                    auto path=toWide(hooks_.libraryRoot(hooks_.ctx));
-                    ShellExecuteW(window_,L"open",path.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
-                }
-                return;
-            }
-            if(x>=620 && x<681) {
-                if(hooks_.startLibraryScan)hooks_.startLibraryScan(hooks_.ctx);
-                else if(hooks_.rescanLibrary)hooks_.rescanLibrary(hooks_.ctx);
-                refreshBanks();return;
-            }
-        }
+// The panel's own buttons under a point (design coordinates), 0 = none. The
+// tab row and the header always; the bottom bar only with the browser open.
+int DesktopEditor::chromeAt(float x,float y) const {
+    std::vector<int> ids={cTabEdit,cTabPlay,cTabBrowser,cPrev,cNext,cSearch,cWrite,cMenu};
+    if(midiLearn_ && !browser_) ids.push_back(cLearnExit);
+    if(browser_) {
+        for(const int id:{cBrBankPrev,cBrBankNext,cBrFolder,cBrRefresh}) ids.push_back(id);
+        if(writing_) {ids.push_back(cBrWrite);ids.push_back(cBrNewBank);}
+        else {ids.push_back(cBrImport);ids.push_back(cBrExport);}
     }
-    if(y<64 || y>469)return;
-    if(x>=7 && x<196) {
+    for(const int id:ids) if(chromeRect(id).Contains(x,y)) return id;
+    return 0;
+}
+void DesktopEditor::chromeClick(int id) {
+    switch(id) {
+    case cTabEdit: case cTabPlay:
+        if(browser_) closeBrowser();
+        setView(id==cTabEdit ? View::Edit : View::Play);
+        return;
+    case cTabBrowser: if(browser_) closeBrowser(); else openBrowser(false);return;
+    case cPrev: stepPatch(-1);return;
+    case cNext: stepPatch(1);return;
+    case cSearch: if(!browser_) openBrowser(false);return;
+    case cWrite: if(browser_ && writing_) commitWrite(); else openBrowser(true);return;
+    case cMenu: {POINT p;GetCursorPos(&p);showMainMenu(p.x,p.y);return;}
+    case cLearnExit: setLearn(false);return;
+    case cBrBankPrev: stepBank(-1);return;
+    case cBrBankNext: stepBank(1);return;
+    case cBrWrite: commitWrite();return;
+    case cBrNewBank: {
+        // SynthModel.newBank: a uniquely named folder, then write into it.
+        if(!hooks_.newBank) return;
+        askText(L"New bank",L"Bank name:",L"New Bank",[this](const std::wstring& name) {
+            const int bank=hooks_.newBank(hooks_.ctx,toUtf8(name).c_str());
+            if(bank<0) {
+                messageBox(L"Cannot create that bank. Check the library folder is writable.",L"Synth2",MB_ICONWARNING);
+                return;
+            }
+            if(hooks_.libraryRevision) knownRevision_=hooks_.libraryRevision(hooks_.ctx);
+            refreshBanks();
+            if(bank<int(banks_.size())) {selectedBank_=bank;selectedSlot_=0;slotScroll_=0;}
+            repaint();
+        });
+        return;
+    }
+    case cBrImport: {POINT p;GetCursorPos(&p);showImportDialog(p.x,p.y);return;}
+    case cBrFolder:
+        if(hooks_.libraryRoot) {
+            auto path=toWide(hooks_.libraryRoot(hooks_.ctx));
+            ShellExecuteW(window_,L"open",path.c_str(),nullptr,nullptr,SW_SHOWNORMAL);
+        }
+        return;
+    case cBrRefresh:
+        if(hooks_.startLibraryScan) hooks_.startLibraryScan(hooks_.ctx);
+        else if(hooks_.rescanLibrary) hooks_.rescanLibrary(hooks_.ctx);
+        refreshBanks();return;
+    case cBrExport: {
+        // The shown bank, as its context menu's Export bank...
+        if(selectedBank_<0 || selectedBank_>=int(banks_.size())) {flash(L"select a bank to export",2500);return;}
+        const std::string source=banks_[size_t(selectedBank_)].source;
+        pickFolder(L"Export bank: a folder holding its patches is created in the folder you choose",
+                   [this,source](const std::wstring& dir) {
+            const int bank=bankNow(source);
+            const std::string made=bank>=0 && hooks_.exportBank ? hooks_.exportBank(hooks_.ctx,bank,toUtf8(dir).c_str()) : "";
+            if(made.empty()) messageBox(L"Unable to export this bank.",L"Synth2",MB_ICONWARNING);
+            else {
+                flash(L"bank exported as "+std::filesystem::path(toWide(made.c_str())).filename().wstring(),4000);
+                revealInExplorer(made);
+            }
+        });
+        return;
+    }
+    default: return;
+    }
+}
+
+void DesktopEditor::browserClick(float x,float y,bool doubleClick) {
+    if(x>=kBankPanel.X && x<kBankPanel.X+kBankPanel.Width && y>=kBankTop-2) {
         const int bank=bankRowAt(x,y);
         if(bank==kNewUserBank ||
            (bank>=0 && bank<int(banks_.size()) && !(writing_ && banks_[size_t(bank)].readOnly))) {
@@ -1748,17 +2207,18 @@ void DesktopEditor::browserClick(float x,float y,bool doubleClick) {
         }
         repaint();return;
     }
-    {
-        if(const int index=slotAt(x,y); index>=0) {
-            // A patch may be dragged: its click acts on release (as a tap),
-            // unless it turned into a drag. Empty slots act at once.
-            const bool patch=selectedBank_>=0 && !banks_[size_t(selectedBank_)].slots[size_t(index)].empty();
-            if(doubleClick || !patch) {slotClick(index,doubleClick);return;}
-            press_={true,false,selectedBank_,index,banks_[size_t(selectedBank_)].source,{},x,y,
-                    slotText(selectedBank_,index)};
-            GetCursorPos(&press_.start);
-            SetCapture(window_);
-        }
+    if(!writing_ && !searchText_.empty() && kSearchBox.Contains(x,y) && x>=kSearchBox.X+kSearchBox.Width-24.f) {
+        searchText_.clear();slotScroll_=0;repaint();return; // the box's right end clears it
+    }
+    if(const int index=slotAt(x,y); index>=0) {
+        // A patch may be dragged: its click acts on release (as a tap),
+        // unless it turned into a drag. Empty slots act at once.
+        const bool patch=selectedBank_>=0 && !banks_[size_t(selectedBank_)].slots[size_t(index)].empty();
+        if(doubleClick || !patch) {slotClick(index,doubleClick);return;}
+        press_={true,false,selectedBank_,index,banks_[size_t(selectedBank_)].source,{},x,y,
+                slotText(selectedBank_,index)};
+        GetCursorPos(&press_.start);
+        SetCapture(window_);
     }
 }
 // A click on a slot of the shown bank: the write dialog picks it, the
@@ -1928,39 +2388,17 @@ void DesktopEditor::updateHover(float x,float y) {
         return;
     }
     int nextControl=-1;
-    int nextChrome=0;
-    // The browser covers only the central panel. Keep the chrome underneath
-    // it (Write, Menu and main LCD) interactive while browsing.
-    if(browser_ && x>=6.f && x<764.f && y>=34.f && y<478.f) {
-        if(y>=37.f && y<=61.f) {
-            if(x>=690.f && x<760.f) nextChrome=14; // Close
-            else if(writing_) {
-                if(x>=514.f && x<601.f) nextChrome=9; // Write patch
-                else if(x>=604.f && x<680.f) nextChrome=10; // New bank
-            } else {
-                if(x>=430.f && x<498.f) nextChrome=11; // Import
-                else if(x>=502.f && x<617.f) nextChrome=12; // Library folder
-                else if(x>=620.f && x<681.f) nextChrome=13; // Refresh
-            }
-        }
-    } else {
-        if(midiLearn_ && x>=558.f && x<744.f && y>=488.f && y<512.f)
-            nextChrome=8; // Exit MIDI Learn
-        else if(y>=484.f && y<=554.f) {
-            if(x>=492.f && x<542.f) nextChrome=y<518.f ? 5 : y>=522.f ? 6 : 0;
-            else if(x>=420.f && x<448.f && y>=495.f && y<515.f) nextChrome=3;
-            else if(x>=449.f && x<473.f && y>=495.f && y<515.f) nextChrome=4;
-        }
-        if(nextChrome==0 && !midiLearn_) { // learn mode: the hotspots take the clicks
+    int nextChrome=chromeAt(x,y);
+    const bool overBrowser=browser_ && kBrowserRect.Contains(x,y);
+    if(nextChrome==0 && !overBrowser && !(midiLearn_ && false)) {
+        if(!midiLearn_) { // learn mode: the hotspots take the clicks
             // Match mouseDown's reverse draw order so overlapping hit areas
             // always highlight the control that will receive the click.
             for(size_t i=controls_.size();i>0;--i) {
                 const auto& c=controls_[i-1];
                 // Highlight clickable buttons only, not waves, LEDs or LCD displays.
                 if(c.id<0 || (c.kind!=Kind::Toggle && c.kind!=Kind::Cycle && c.kind!=Kind::Badge)) continue;
-                if(x>=c.x && x<c.x+c.w && y>=c.y && y<c.y+c.h) {
-                    nextControl=int(i-1);break;
-                }
+                if(x>=c.x && x<c.x+c.w && y>=c.y && y<c.y+c.h) {nextControl=int(i-1);break;}
             }
         }
     }
@@ -1983,31 +2421,14 @@ void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
         SetCapture(window_);
         return;
     }
-    // The version box opens the project page (SynthPanelView.projectURL).
-    if(isVersionBox(x,y)) {
-        ShellExecuteW(window_,L"open",kProjectURL,nullptr,nullptr,SW_SHOWNORMAL);
-        return;
-    }
-    // Route to the browser only inside the browser's actual visible bounds.
-    // Header controls and the bottom strip keep their normal mouse actions.
-    if(browser_ && x>=6.f && x<764.f && y>=34.f && y<478.f) {
-        browserClick(x,y,doubleClick);
-        return;
-    }
-    if(midiLearn_ && x>=558.f && x<744.f && y>=488.f && y<512.f) {setLearn(false);return;}
-    if(y>=484 && y<=554) {
-        if(x>=492 && x<542) {
-            // write again while the write dialog is open = its Write (save
-            // in place: click, click)
-            if(y<518) {if(browser_ && writing_) commitWrite(); else openBrowser(true);return;}
-            POINT p;GetCursorPos(&p);showMainMenu(p.x,p.y);return;
-        }
-        if(x>=420 && x<473 && y<520) {stepPatch(x<448?-1:1);return;}
-        if(x>=50 && x<482) {browser_?closeBrowser():openBrowser(false);return;}
-    }
-    if(y<32 && x<100) {
+    if(const int chrome=chromeAt(x,y)) {chromeClick(chrome);return;}
+    // The LCD opens / closes the browser; the logo opens the theme menu.
+    if(kLcdRect.Contains(x,y)) {if(browser_) closeBrowser(); else openBrowser(false);return;}
+    if(y<29.f && x<105.f) {
         POINT p;GetCursorPos(&p);showThemeMenu(p.x,p.y);return;
     }
+    // Inside the browser's panel only the browser takes the mouse.
+    if(browser_ && kBrowserRect.Contains(x,y)) {browserClick(x,y,doubleClick);return;}
     // Learn mode: a hotspot takes the click (the controls under it stop
     // taking input); the others (volume, ctrl src / assign menus) still work.
     if(const int id=midiLearn_ ? learnHit(x,y) : -1; id>=0) {
@@ -2107,7 +2528,10 @@ void DesktopEditor::mouseUp() {
 constexpr int kWheelBanks=-2, kWheelSlots=-3;
 int DesktopEditor::wheelTarget(float x,float y) const {
     // Scrolling over the master volume must change volume, not the browser.
-    if(browser_ && x>=6.f && x<764.f && y>=34.f && y<478.f) return x<196 ? kWheelBanks : kWheelSlots;
+    if(browser_ && kBrowserRect.Contains(x,y)) {
+        if(kBankPanel.Contains(x,y)) return kWheelBanks;
+        return kPresetPanel.Contains(x,y) ? kWheelSlots : -1;
+    }
     if(midiLearn_) return -1;
     if(typeMenu_>=0 && typeMenu().rect().Contains(x,y)) return -1; // the mac's WheelShield
     for(auto it=controls_.rbegin();it!=controls_.rend();++it) {
@@ -2141,14 +2565,12 @@ void DesktopEditor::wheel(int direction,float x,float y) {
     if(target==kWheelBanks) {
         // Wheel input is expressed as rows, not merely the sign of one
         // notch. A standard wheel step now moves eight bank entries.
-        const int next=std::clamp(bankScroll_-direction,0,std::max(0,bankRowCount()-20));
+        const int next=std::clamp(bankScroll_-direction,0,std::max(0,bankRowCount()-kBankRows));
         if(next!=bankScroll_) {bankScroll_=next;invalidate(kBrowserRect);}
     } else if(target==kWheelSlots) {
-        if(selectedBank_!=kNewUserBank && (selectedBank_<0 || selectedBank_>=int(banks_.size()))) return;
-        const int count=selectedBank_==kNewUserBank?s2::kBankSlots:int(banks_[size_t(selectedBank_)].slots.size());
-        const int rows=(count+3)/4;
-        const int amount=(direction>0?1:-1)*std::max(1,(std::abs(direction)+1)/2);
-        const int next=std::clamp(slotScroll_-amount,0,std::max(0,rows-20));
+        const int total=int(shownSlots().size());
+        const int amount=(direction>0?1:-1)*std::max(1,(std::abs(direction)+1)/2)*3;
+        const int next=std::clamp(slotScroll_-amount,0,std::max(0,total-kPresetRows));
         if(next!=slotScroll_) {slotScroll_=next;invalidate(kBrowserRect);}
     } else {
         // Menu > Invert mouse wheel: value controls only (the lists above
@@ -2386,6 +2808,19 @@ void DesktopEditor::showParameterMenu(int id,int x,int y) {
         if(selected>=2000&&selected<2000+int(values.size()))setValueOnce(id,values[size_t(selected-2000)]);
     });
 }
+#if defined(OXO_SNAPSHOT)
+void DesktopEditor::snapshotMode(const std::string& mode) {
+    if(mode=="play") {setView(View::Play);return;}
+    if(mode.rfind("search:",0)==0) searchText_=toWide(mode.substr(7).c_str());
+    if(mode=="browser" || mode=="write" || mode.rfind("search:",0)==0) {
+        browser_=true;writing_=mode=="write";
+        int b=-1,sl=-1;
+        hooks_.loadedProgram(hooks_.ctx,&b,&sl);
+        selectedBank_=b;selectedSlot_=sl;
+        refreshBanks();
+    }
+}
+#endif
 void DesktopEditor::tick() {
     sharedThemes().flush(false);
     savePendingSize(false);
@@ -2432,7 +2867,7 @@ void DesktopEditor::tick() {
         if(value(int(id))!=knownValues_[id]) valueChanged(int(id));
     if(!midiLearn_ && hooks_.voiceStates) {
         const uint64_t states=hooks_.voiceStates(hooks_.ctx);
-        if(states!=knownVoiceStates_) {knownVoiceStates_=states;invalidate(kGridRect);}
+        if(states!=knownVoiceStates_) {knownVoiceStates_=states;invalidate(kMeterRect);}
     }
 }
 
