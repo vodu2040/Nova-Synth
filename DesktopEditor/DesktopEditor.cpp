@@ -229,6 +229,7 @@ void led(Graphics& g, const Color& c, float x,float y,float radius=3, bool glowi
 // Set at the start of every draw: the light-strip ("Modern") themes also get flat
 // pill buttons and a value arc round each knob.
 bool gFlatStyle=false;
+bool gLightLower=false; // the lower row is silver too (the lightest header colours only)
 void darkButton(Graphics& g, Color face, float x,float y,float w,float h, bool hovered=false) {
     // Hover is visual only; the size and text layout never change.
     if (hovered) face=blend(face,rgb(0xFFFFFF),.09f);
@@ -274,6 +275,7 @@ Palette13 lowerPalette(const Palette13& p) {
     return q;
 }
 constexpr float kLowerRowTop=282.f;
+bool lightLowerRow(const Palette13& p) { return luma(p[kHeader])>.82f && luma(p[kHeader])>luma(p[kPanel])+.35f; }
 bool lightStrips(const Palette13& p) { return luma(p[kHeader])>.75f && luma(p[kHeader])>luma(p[kPanel])+.35f; }
 // A section / panel plate: a dark card with a header band and an accent title.
 void sectionPlate(Graphics& g,const Palette13& p,float x,float y,float w,float h,float band=19.f,bool lower=false) {
@@ -1019,7 +1021,7 @@ void DesktopEditor::drawChrome(Graphics& g,int id,bool hovered) {
 }
 
 void DesktopEditor::drawControlStatic(Graphics& g,const Control& c) {
-    const bool lowerRow=gFlatStyle && c.y>=kLowerRowTop;
+    const bool lowerRow=gLightLower && c.y>=kLowerRowTop;
     const Palette13 lowerPal=lowerRow ? lowerPalette(colors_) : colors_;
     const auto& p=lowerRow ? lowerPal : colors_;
     switch(c.kind) {
@@ -1074,7 +1076,7 @@ void DesktopEditor::drawControlStatic(Graphics& g,const Control& c) {
 }
 
 void DesktopEditor::drawControlDynamic(Graphics& g,const Control& c,bool hovered) {
-    const bool lowerRow=gFlatStyle && c.y>=kLowerRowTop;
+    const bool lowerRow=gLightLower && c.y>=kLowerRowTop;
     const Palette13 lowerPal=lowerRow ? lowerPalette(colors_) : colors_;
     const auto& p=lowerRow ? lowerPal : colors_;
     const Color ledOff=blend(p[kPanel],p[kLabel],.36f);
@@ -1386,7 +1388,7 @@ void DesktopEditor::drawFilterGraph(Graphics& g,bool frameOnly) {
 
 void DesktopEditor::drawStatic(Graphics& g) {
     const auto& p=colors_;
-    gFlatStyle=lightStrips(p);
+    gFlatStyle=lightStrips(p);gLightLower=lightLowerRow(p);
     // background: the panel colour with a soft vignette
     {
         LinearGradientBrush bg(PointF(0,0),PointF(0,kDesignHeight),blend(p[kPanel],rgb(0xFFFFFF),.03f),blend(p[kPanel],rgb(0x000000),.22f));
@@ -1426,11 +1428,12 @@ void DesktopEditor::drawStatic(Graphics& g) {
     const size_t count=edit ? std::size(editSections) : std::size(playSections);
     for(size_t i=0;i<count;i++) {
         const auto& sec=sections[i];
-        sectionPlate(g,p,sec.x,sec.y,sec.w,sec.h,19.f,gFlatStyle&&sec.y>=kLowerRowTop);
+        sectionPlate(g,p,sec.x,sec.y,sec.w,sec.h,19.f,gLightLower&&sec.y>=kLowerRowTop);
+        if(gFlatStyle && !gLightLower && sec.y<kLowerRowTop) roundedOutline(g,alpha(p[kLed],150),sec.x,sec.y,sec.w,sec.h,3.5f,1.2f); // accent outline on the top row
         if(lightStrips(p)) text(g,sec.name,sec.x,sec.y,sec.w,19,9.2f,rgb(0x1C1C1E),true,true); // centred, dark
         else text(g,sec.name,sec.x+9,sec.y,sec.w-12,19,9.6f,p[kHeaderText],true);
     }
-    const Palette13 lowerPal=gFlatStyle ? lowerPalette(p) : p;
+    const Palette13 lowerPal=gLightLower ? lowerPalette(p) : p;
     if(edit) {
         // dividers
         rule(g,p,9,169.5f,122,169.5f);
@@ -1465,7 +1468,7 @@ void DesktopEditor::drawStatic(Graphics& g) {
 }
 
 void DesktopEditor::drawDynamic(Graphics& g) {
-    gFlatStyle=lightStrips(colors_);
+    gFlatStyle=lightStrips(colors_);gLightLower=lightLowerRow(colors_);
     const auto& p=colors_;
     // The browser covers the panel area below the tabs: only the header's
     // controls (volume) show through.
