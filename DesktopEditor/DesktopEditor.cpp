@@ -248,14 +248,25 @@ void displayTile(Graphics& g,const Palette13& p,float x,float y,float w,float h,
     Pen rim(alpha(p[kDisplayText],lit?150:46),.7f);
     g.DrawPath(&rim,&inner);
 }
+// Relative brightness 0..1.
+float luma(const Color& c) { return (.2126f*c.GetR()+.7152f*c.GetG()+.0722f*c.GetB())/255.f; }
+// A theme whose header colour is very light gets light header strips with dark titles
+// over deeper, recessed section wells (the "Modern" look); every other theme keeps
+// the dark card with an accent title.
+bool lightStrips(const Palette13& p) { return luma(p[kHeader])>.75f && luma(p[kHeader])>luma(p[kPanel])+.35f; }
 // A section / panel plate: a dark card with a header band and an accent title.
 void sectionPlate(Graphics& g,const Palette13& p,float x,float y,float w,float h,float band=19.f) {
     GraphicsPath path;roundedPath(path,x,y,w,h,3.5f);
-    LinearGradientBrush body(PointF(x,y),PointF(x,y+h),blend(p[kPanel],rgb(0xFFFFFF),.035f),blend(p[kPanel],rgb(0x000000),.10f));
+    const bool strip=lightStrips(p);
+    LinearGradientBrush body(PointF(x,y),PointF(x,y+h),
+        strip ? blend(p[kPanel],rgb(0x000000),.30f) : blend(p[kPanel],rgb(0xFFFFFF),.035f),
+        strip ? blend(p[kPanel],rgb(0x000000),.46f) : blend(p[kPanel],rgb(0x000000),.10f));
     g.FillPath(&body,&path);
     const GraphicsState saved=g.Save();
     g.SetClip(RectF(x,y,w,band),CombineModeReplace);
-    LinearGradientBrush head(PointF(x,y),PointF(x,y+band),blend(p[kPanel],rgb(0x000000),.18f),blend(p[kPanel],rgb(0x000000),.34f));
+    LinearGradientBrush head(PointF(x,y),PointF(x,y+band),
+        strip ? blend(p[kHeader],rgb(0xFFFFFF),.35f) : blend(p[kPanel],rgb(0x000000),.18f),
+        strip ? blend(p[kHeader],rgb(0x000000),.12f) : blend(p[kPanel],rgb(0x000000),.34f));
     g.FillPath(&head,&path);
     g.Restore(saved);
     Pen line(Color(190,6,8,9),1.f);
@@ -1339,7 +1350,8 @@ void DesktopEditor::drawStatic(Graphics& g) {
     for(size_t i=0;i<count;i++) {
         const auto& sec=sections[i];
         sectionPlate(g,p,sec.x,sec.y,sec.w,sec.h);
-        text(g,sec.name,sec.x+9,sec.y,sec.w-12,19,9.6f,p[kHeaderText],true);
+        if(lightStrips(p)) text(g,sec.name,sec.x,sec.y,sec.w,19,9.2f,blend(p[kPanel],rgb(0x000000),.35f),true,true); // centred, dark
+        else text(g,sec.name,sec.x+9,sec.y,sec.w-12,19,9.6f,p[kHeaderText],true);
     }
     if(edit) {
         // dividers
