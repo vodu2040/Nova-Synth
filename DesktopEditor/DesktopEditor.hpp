@@ -306,6 +306,10 @@ private:
     std::array<int, kLearnCount> learnCC_{}; // learned CC per param (0 = none), read on entering learn
     int lastCcToken_ = 0;
     int dragId_ = -1;
+    bool dragFader_ = false, dragGraph_ = false;
+    float dragFaderTop_ = 0, dragFaderLen_ = 1;
+    void dragTo(float y);
+    void graphTo(float x, float y);
     float dragStartY_ = 0;
     int dragStartValue_ = 0;
 #if defined(_WIN32)

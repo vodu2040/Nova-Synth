@@ -781,6 +781,7 @@ void DesktopEditor::invalidate(const RectF& r) const {
 void DesktopEditor::invalidateParam(int id) const {
     for(const auto& c:controls_) if(c.id==id) invalidate(bounds(c));
     if(id==38 || id==94) invalidate(kMeterRect);
+    if(id==14 || id==19 || id==20) invalidate(kGraphRect); // the filter response curve
 }
 void DesktopEditor::valueChanged(int id) {
     if(id>=0 && id<int(knownValues_.size())) knownValues_[size_t(id)]=value(id);
@@ -2448,6 +2449,22 @@ void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
         }
         return;
     }
+    // The filter graph: drag the curve (across = cutoff, up = resonance).
+    if(!midiLearn_ && view_==View::Edit && !browser_ && kGraphRect.Contains(x,y)) {
+        if(doubleClick) {
+            for(const int id:{19,20}) {
+                int a=0,b=127,d=0;
+                if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,id,&a,&b,&d);
+                setValueOnce(id,d);
+            }
+            return;
+        }
+        dragGraph_=true;
+        if(hooks_.beginEdit) {hooks_.beginEdit(hooks_.ctx,19);hooks_.beginEdit(hooks_.ctx,20);}
+        SetCapture(window_);
+        graphTo(x,y);
+        return;
+    }
     for(auto it=controls_.rbegin();it!=controls_.rend();++it) {
         const auto& c=*it;
         if(x<c.x || x>=c.x+c.w || y<c.y || y>=c.y+c.h)continue;
@@ -2456,7 +2473,7 @@ void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
         // Only knobs and non-cycling value displays reset on a double click,
         // exactly as in SwiftUI. Cycle buttons, LEDs, waveform selectors and
         // toggles must treat every fast click as another normal selection.
-        const bool doubleTapResets = c.kind==Kind::Knob ||
+        const bool doubleTapResets = c.kind==Kind::Knob || c.kind==Kind::Fader ||
             (c.kind==Kind::Display && c.id!=64 && c.id!=78 && c.id!=82);
         if(doubleClick && doubleTapResets) {
             int a=0,b=127,d=0;
@@ -2474,6 +2491,13 @@ void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
             dragId_=c.id;dragStartY_=y;dragStartValue_=value(c.id);
             if(hooks_.beginEdit)hooks_.beginEdit(hooks_.ctx,c.id);
             SetCapture(window_);return;
+        case Kind::Fader:
+            // The cap goes to the pointer, then follows it (vertical, whole track).
+            dragId_=c.id;dragFader_=true;dragFaderTop_=c.y+5.f;dragFaderLen_=c.h-10.f;
+            if(hooks_.beginEdit)hooks_.beginEdit(hooks_.ctx,c.id);
+            SetCapture(window_);
+            dragTo(y);
+            return;
         case Kind::Toggle:
         case Kind::Badge: setValueOnce(c.id,value(c.id)?0:1);return;
         case Kind::Cycle: cycle(c.id,1);return;
@@ -2486,6 +2510,30 @@ void DesktopEditor::mouseDown(float x,float y,bool doubleClick) {
         }
     }
 }
+// A fader's value for a pointer height (its whole track).
+void DesktopEditor::dragTo(float y) {
+    int low=0,high=127,def=0;
+    if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,dragId_,&low,&high,&def);
+    const float frac=std::clamp(1.f-(y-dragFaderTop_)/std::max(1.f,dragFaderLen_),0.f,1.f);
+    const int v=low+int(std::lround(frac*float(high-low)));
+    if(v==value(dragId_)) return;
+    if(hooks_.setValue) hooks_.setValue(hooks_.ctx,dragId_,v);
+    valueChanged(dragId_);
+    show(dragId_);
+}
+// The filter graph's plot: across = cutoff (its axis is the knob's own
+// exponential scale), up = resonance.
+void DesktopEditor::graphTo(float x,float y) {
+    const float px=503.f,py=84.f,pw=163.f,ph=57.f;
+    const int cutoff=std::clamp(int(std::lround((x-px)/pw*127.f)),0,127);
+    const int res=std::clamp(int(std::lround((1.f-(y-py)/ph)*127.f)),0,127);
+    for(const auto& [id,v]:{std::pair<int,int>{19,cutoff},{20,res}}) {
+        if(v==value(id)) continue;
+        if(hooks_.setValue) hooks_.setValue(hooks_.ctx,id,v);
+        valueChanged(id);
+    }
+    show(19);
+}
 void DesktopEditor::mouseMove(float x, float y) {
     updateHover(x,y);
     if(press_.active) {dragMove(x,y);return;}
@@ -2494,6 +2542,8 @@ void DesktopEditor::mouseMove(float x, float y) {
         requestWidth(resizeStartWidth_+(current.x-resizeStartScreen_.x));
         return;
     }
+    if(dragGraph_) {graphTo(x,y);return;}
+    if(dragFader_) {dragTo(y);return;}
     if(dragId_<0)return;
     int low=0,high=127,def=0;
     if(hooks_.paramInfo) hooks_.paramInfo(hooks_.ctx,dragId_,&low,&high,&def);
@@ -2517,9 +2567,15 @@ void DesktopEditor::mouseUp() {
         if(GetCapture()==window_)ReleaseCapture();
         return;
     }
+    if(dragGraph_) {
+        dragGraph_=false;
+        if(hooks_.endEdit) {hooks_.endEdit(hooks_.ctx,19);hooks_.endEdit(hooks_.ctx,20);}
+        if(GetCapture()==window_)ReleaseCapture();
+        return;
+    }
     if(dragId_<0)return;
     if(hooks_.endEdit)hooks_.endEdit(hooks_.ctx,dragId_);
-    dragId_=-1;
+    dragId_=-1;dragFader_=false;
     if(GetCapture()==window_)ReleaseCapture();
 }
 // What a wheel event at (x, y) moves: a parameter id, kWheelBanks /
