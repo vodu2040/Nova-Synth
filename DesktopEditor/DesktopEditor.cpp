@@ -226,10 +226,21 @@ void led(Graphics& g, const Color& c, float x,float y,float radius=3, bool glowi
     Pen edge(Color(150,0,0,0),.6f);
     g.DrawEllipse(&edge,x-radius,y-radius,2*radius,2*radius);
 }
+// Set at the start of every draw: the light-strip ("Modern") themes also get flat
+// pill buttons and a value arc round each knob.
+bool gFlatStyle=false;
 void darkButton(Graphics& g, Color face, float x,float y,float w,float h, bool hovered=false) {
-    GraphicsPath path;roundedPath(path,x,y,w,h,3.f);
     // Hover is visual only; the size and text layout never change.
     if (hovered) face=blend(face,rgb(0xFFFFFF),.09f);
+    if (gFlatStyle) {
+        GraphicsPath pill;roundedPath(pill,x,y,w,h,std::min(h*.5f,9.f));
+        SolidBrush flat(face);
+        g.FillPath(&flat,&pill);
+        Pen rim(Color(150,255,255,255),.8f);
+        g.DrawPath(&rim,&pill);
+        return;
+    }
+    GraphicsPath path;roundedPath(path,x,y,w,h,3.f);
     LinearGradientBrush grad(PointF(x,y),PointF(x,y+h),blend(face,rgb(0xFFFFFF),.13f),blend(face,rgb(0x000000),.18f));
     g.FillPath(&grad,&path);
     Pen edge(Color(220,3,4,5),1.f);
@@ -253,11 +264,40 @@ float luma(const Color& c) { return (.2126f*c.GetR()+.7152f*c.GetG()+.0722f*c.Ge
 // A theme whose header colour is very light gets light header strips with dark titles
 // over deeper, recessed section wells (the "Modern" look); every other theme keeps
 // the dark card with an accent title.
+// Themes with a light knob colour get silver caps on a dark base ring.
+bool silverKnobs(const Palette13& p) { return luma(p[kKnobGradient])>.65f; }
+// The lower row of a light-strip theme is brushed silver: dark ink on light panels.
+Palette13 lowerPalette(const Palette13& p) {
+    Palette13 q=p;
+    q[kLabel]=rgb(0x1C1C1E);
+    q[kPanel]=blend(p[kHeader],rgb(0x000000),.10f);
+    return q;
+}
+constexpr float kLowerRowTop=282.f;
 bool lightStrips(const Palette13& p) { return luma(p[kHeader])>.75f && luma(p[kHeader])>luma(p[kPanel])+.35f; }
 // A section / panel plate: a dark card with a header band and an accent title.
-void sectionPlate(Graphics& g,const Palette13& p,float x,float y,float w,float h,float band=19.f) {
+void sectionPlate(Graphics& g,const Palette13& p,float x,float y,float w,float h,float band=19.f,bool lower=false) {
     GraphicsPath path;roundedPath(path,x,y,w,h,3.5f);
     const bool strip=lightStrips(p);
+    if(strip && lower) { // brushed silver card
+        LinearGradientBrush silver(PointF(x,y),PointF(x,y+h),blend(p[kHeader],rgb(0xFFFFFF),.25f),blend(p[kHeader],rgb(0x000000),.14f));
+        g.FillPath(&silver,&path);
+        const GraphicsState keep=g.Save();
+        g.SetClip(RectF(x+1.f,y+1.f,w-2.f,h-2.f),CombineModeReplace);
+        Pen grain(Color(14,0,0,0),.6f);
+        for(float gy=y+band+1.f;gy<y+h;gy+=2.f) g.DrawLine(&grain,x,gy,x+w,gy);
+        g.Restore(keep);
+        LinearGradientBrush bar(PointF(x,y),PointF(x,y+band),blend(p[kHeader],rgb(0xFFFFFF),.45f),blend(p[kHeader],rgb(0x000000),.06f));
+        const GraphicsState keep2=g.Save();
+        g.SetClip(RectF(x,y,w,band),CombineModeReplace);
+        g.FillPath(&bar,&path);
+        g.Restore(keep2);
+        Pen edge(Color(150,70,72,76),1.f);
+        g.DrawPath(&edge,&path);
+        Pen under(Color(120,60,62,66),1.f);
+        g.DrawLine(&under,x+1.f,y+band,x+w-1.f,y+band);
+        return;
+    }
     LinearGradientBrush body(PointF(x,y),PointF(x,y+h),
         strip ? blend(p[kPanel],rgb(0x000000),.30f) : blend(p[kPanel],rgb(0xFFFFFF),.035f),
         strip ? blend(p[kPanel],rgb(0x000000),.46f) : blend(p[kPanel],rgb(0x000000),.10f));
@@ -292,6 +332,23 @@ void paintKnobBody(Graphics& g,const Palette13& p,float x,float y,float d) {
         const float r0=r+d*.10f+.8f, r1=r0+std::max(2.2f,d*.17f)*(i%5==0 ? 1.15f : .85f);
         g.DrawLine(&ticks,x+c*r0,y+s*r0,x+c*r1,y+s*r1);
     }
+    if(silverKnobs(p)) { // dark base ring, brushed-metal cap
+        SolidBrush ring(blend(p[kKnobBody],rgb(0x000000),.35f));
+        g.FillEllipse(&ring,x-r,y-r,d,d);
+        const float cr=r*.80f;
+        GraphicsPath cap;cap.AddEllipse(x-cr,y-cr,2*cr,2*cr);
+        LinearGradientBrush metal(PointF(x,y-cr),PointF(x,y+cr),blend(p[kKnobGradient],rgb(0xFFFFFF),.40f),blend(p[kKnobGradient],rgb(0x000000),.38f));
+        g.FillPath(&metal,&cap);
+        for(const float k:{.34f,.54f,.74f}) {
+            Pen brushed(Color(k<.5f?46:34,k<.5f?0:255,k<.5f?0:255,k<.5f?0:255),.6f);
+            g.DrawEllipse(&brushed,x-cr*k-.0f,y-cr*k,2*cr*k,2*cr*k);
+        }
+        Pen capRim(Color(200,4,4,5),std::max(.8f,d*.04f));
+        g.DrawEllipse(&capRim,x-cr,y-cr,2*cr,2*cr);
+        Pen outer(Color(235,3,3,4),std::max(1.f,d*.06f));
+        g.DrawEllipse(&outer,x-r,y-r,d,d);
+        return;
+    }
     GraphicsPath circle;
     circle.AddEllipse(x-r,y-r,d,d);
     PathGradientBrush body(&circle);
@@ -315,9 +372,24 @@ void paintKnobPointer(Graphics& g,const Palette13& p,float x,float y,float d,flo
     const float r=d*.5f;
     const float angle=(-140+280*frac-90)*kPi/180;
     const float dx=std::cos(angle), dy=std::sin(angle);
+    if(gFlatStyle) { // a value arc just outside the knob body
+        const float ar=r+d*.05f;
+        Pen track(Color(90,255,255,255),std::max(1.2f,d*.07f)), value(p[kHeaderText],std::max(1.6f,d*.10f));
+        track.SetStartCap(LineCapRound);track.SetEndCap(LineCapRound);value.SetStartCap(LineCapRound);value.SetEndCap(LineCapRound);
+        const int steps=36;
+        for(int pass=0;pass<2;pass++) {
+            const float span=pass==0 ? 1.f : frac;
+            const int n=std::max(1,int(std::ceil(steps*span)));
+            for(int i=0;i<n;i++) {
+                const float a0=(-230+280*span*float(i)/float(n))*kPi/180, a1=(-230+280*span*float(i+1)/float(n))*kPi/180;
+                g.DrawLine(pass==0 ? &track : &value,PointF(x+std::cos(a0)*ar,y+std::sin(a0)*ar),PointF(x+std::cos(a1)*ar,y+std::sin(a1)*ar));
+            }
+        }
+    }
     Pen hand(p[kKnobDial],std::max(1.5f,d*.085f));
     hand.SetStartCap(LineCapRound);hand.SetEndCap(LineCapRound);
-    g.DrawLine(&hand,PointF(x+dx*r*.30f,y+dy*r*.30f),PointF(x+dx*r*.86f,y+dy*r*.86f));
+    const float reach=silverKnobs(p) ? .70f : .86f;
+    g.DrawLine(&hand,PointF(x+dx*r*.22f,y+dy*r*.22f),PointF(x+dx*r*reach,y+dy*r*reach));
 }
 // A vertical fader: the slot and its scale ticks (static)...
 void paintFaderTrack(Graphics& g,const Palette13& p,float cx,float top,float length) {
@@ -591,12 +663,12 @@ void DesktopEditor::constructLayout() {
     radio(97,0,L"0oct",398,129,407,50);radio(97,1,L"-1oct",398,143,407,50);
     plate(L"OSC 2",232,168,36,15);
     waves(1,285.5f,314.5f,167.5f,187,26,13,{1,2,3,4},{1,2,3,4});
-    button(7,L"ring",Kind::Toggle,328,170,28,13);
-    button(6,L"sync",Kind::Toggle,358,170,28,13);
-    button(4,L"track",Kind::Toggle,388,170,29,13);
-    knob(2,L"pitch",427.5f,174,19,15);knob(3,L"fine",456,174,19,15);
-    knob(5,L"mix",300,215,19,13);knob(8,L"p/w",331,215,19,13);
-    knob(91,L"phase",368,215,19,13);knob(72,L"tune",407,215,19,13);
+    button(7,L"ring",Kind::Toggle,327,170,27,13);
+    button(6,L"sync",Kind::Toggle,356,170,29,13);
+    button(4,L"track",Kind::Toggle,387,170,32,13);
+    knob(2,L"pitch",433.5f,174,19,15);knob(3,L"fine",460,174,19,15);
+    knob(5,L"mix",300,213,19,15.5f);knob(8,L"p/w",331,213,19,15.5f);
+    knob(91,L"phase",368,213,19,15.5f);knob(72,L"tune",407,213,19,15.5f);
     display(9,434,204,29,19);label(448,228,L"key shift");
     label(232,246,L"MOD ENV",true);
     button(10,L"ON",Kind::Toggle,232,254,36,14);
@@ -947,7 +1019,9 @@ void DesktopEditor::drawChrome(Graphics& g,int id,bool hovered) {
 }
 
 void DesktopEditor::drawControlStatic(Graphics& g,const Control& c) {
-    const auto& p=colors_;
+    const bool lowerRow=gFlatStyle && c.y>=kLowerRowTop;
+    const Palette13 lowerPal=lowerRow ? lowerPalette(colors_) : colors_;
+    const auto& p=lowerRow ? lowerPal : colors_;
     switch(c.kind) {
     case Kind::Label: {
         const bool accentInk=c.symbol==1;
@@ -967,8 +1041,8 @@ void DesktopEditor::drawControlStatic(Graphics& g,const Control& c) {
     case Kind::Cycle: {
         darkButton(g,p[kButton],c.x,c.y,c.w,c.h);
         const bool toggle=c.kind==Kind::Toggle;
-        const float size=c.w<30.f ? 7.0f : 9.0f;
-        const float lead=toggle ? (c.w<30.f ? 6.8f : 12.f) : 0.f;
+        const float size=c.w<33.f ? 7.0f : 9.0f;
+        const float lead=toggle ? (c.w<33.f ? 6.8f : 12.f) : 0.f;
         text(g,c.label,c.x+lead,c.y,c.w-lead-1.f,c.h,size,rgb(0xEDEDED),true,true);
         return;
     }
@@ -1000,7 +1074,9 @@ void DesktopEditor::drawControlStatic(Graphics& g,const Control& c) {
 }
 
 void DesktopEditor::drawControlDynamic(Graphics& g,const Control& c,bool hovered) {
-    const auto& p=colors_;
+    const bool lowerRow=gFlatStyle && c.y>=kLowerRowTop;
+    const Palette13 lowerPal=lowerRow ? lowerPalette(colors_) : colors_;
+    const auto& p=lowerRow ? lowerPal : colors_;
     const Color ledOff=blend(p[kPanel],p[kLabel],.36f);
     switch(c.kind) {
     case Kind::Label:
@@ -1030,12 +1106,12 @@ void DesktopEditor::drawControlDynamic(Graphics& g,const Control& c,bool hovered
         if(hovered) {
             darkButton(g,p[kButton],c.x,c.y,c.w,c.h,true);
             const bool toggle=c.kind==Kind::Toggle;
-            const float lead=toggle ? (c.w<30.f ? 6.8f : 12.f) : 0.f;
-            text(g,c.label,c.x+lead,c.y,c.w-lead-1.f,c.h,c.w<30.f ? 7.0f : 9.0f,rgb(0xEDEDED),true,true);
+            const float lead=toggle ? (c.w<33.f ? 6.8f : 12.f) : 0.f;
+            text(g,c.label,c.x+lead,c.y,c.w-lead-1.f,c.h,c.w<33.f ? 7.0f : 9.0f,rgb(0xEDEDED),true,true);
         }
         if(c.kind==Kind::Toggle) {
             const bool on=value(c.id)!=0;
-            led(g,on?p[kLed]:ledOff,c.x+(c.w<30.f?6.5f:8.f),c.y+c.h/2,c.w<30.f?2.2f:2.9f,on);
+            led(g,on?p[kLed]:ledOff,c.x+(c.w<33.f?6.5f:8.f),c.y+c.h/2,c.w<33.f?2.2f:2.9f,on);
         }
         return;
     case Kind::Check: {
@@ -1310,6 +1386,7 @@ void DesktopEditor::drawFilterGraph(Graphics& g,bool frameOnly) {
 
 void DesktopEditor::drawStatic(Graphics& g) {
     const auto& p=colors_;
+    gFlatStyle=lightStrips(p);
     // background: the panel colour with a soft vignette
     {
         LinearGradientBrush bg(PointF(0,0),PointF(0,kDesignHeight),blend(p[kPanel],rgb(0xFFFFFF),.03f),blend(p[kPanel],rgb(0x000000),.22f));
@@ -1349,10 +1426,11 @@ void DesktopEditor::drawStatic(Graphics& g) {
     const size_t count=edit ? std::size(editSections) : std::size(playSections);
     for(size_t i=0;i<count;i++) {
         const auto& sec=sections[i];
-        sectionPlate(g,p,sec.x,sec.y,sec.w,sec.h);
-        if(lightStrips(p)) text(g,sec.name,sec.x,sec.y,sec.w,19,9.2f,blend(p[kPanel],rgb(0x000000),.35f),true,true); // centred, dark
+        sectionPlate(g,p,sec.x,sec.y,sec.w,sec.h,19.f,gFlatStyle&&sec.y>=kLowerRowTop);
+        if(lightStrips(p)) text(g,sec.name,sec.x,sec.y,sec.w,19,9.2f,rgb(0x1C1C1E),true,true); // centred, dark
         else text(g,sec.name,sec.x+9,sec.y,sec.w-12,19,9.6f,p[kHeaderText],true);
     }
+    const Palette13 lowerPal=gFlatStyle ? lowerPalette(p) : p;
     if(edit) {
         // dividers
         rule(g,p,9,169.5f,122,169.5f);
@@ -1360,9 +1438,9 @@ void DesktopEditor::drawStatic(Graphics& g) {
         rule(g,p,314,238,314,272);
         rule(g,p,484,227,565,227);rule(g,p,569,234,569,261);
         rule(g,p,679,162.5f,870,162.5f);
-        rule(g,p,106.5f,306,106.5f,382);rule(g,p,9,346,100,346);rule(g,p,9,383,162,383);
-        rule(g,p,230,335,230,395);
-        rule(g,p,333,375,475,375);
+        rule(g,lowerPal,106.5f,306,106.5f,382);rule(g,lowerPal,9,346,100,346);rule(g,lowerPal,9,383,162,383);
+        rule(g,lowerPal,230,335,230,395);
+        rule(g,lowerPal,333,375,475,375);
         // the LFO destination matrix
         roundedFill(g,rgb(0x08090B),126.5f,99,89,140,4.f);
         roundedOutline(g,blend(p[kPanel],p[kLabel],.2f),126.5f,99,89,140,4.f);
@@ -1387,6 +1465,7 @@ void DesktopEditor::drawStatic(Graphics& g) {
 }
 
 void DesktopEditor::drawDynamic(Graphics& g) {
+    gFlatStyle=lightStrips(colors_);
     const auto& p=colors_;
     // The browser covers the panel area below the tabs: only the header's
     // controls (volume) show through.
